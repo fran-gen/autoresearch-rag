@@ -1,0 +1,66 @@
+{% extends "logged_in.html" %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Experiment detail</p>
+        <h1 class="title is-3 mb-2">Experiment {{ exp_id }}</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Inspect the returned experiment summary.</p>
+      </div>
+    </div>
+    <div class="level-right">
+      <a class="button is-light" href="{{ url_for('experiment_detail_search') }}">Back to search</a>
+    </div>
+  </section>
+
+  <div class="experiment-detail-grid page-block">
+    <div class="box experiment-detail-meta-card">
+      <p class="heading">Metadata</p>
+      <h2 class="title is-5">Selected run</h2>
+      <div class="compact-kv-list">
+        <p><strong>Experiment ID</strong><code>{{ exp_id }}</code></p>
+        <p><strong>Status</strong><span>{{ status_label }}</span></p>
+        <p><strong>Created</strong><span>{{ created_at_display }}</span></p>
+        <p><strong>Accepted</strong>{% if accepted is sameas true %}<span class="tag is-success is-light">Yes</span>{% elif accepted is sameas false %}<span class="tag is-danger is-light">No</span>{% else %}<span class="tag is-light">—</span>{% endif %}</p>
+      </div>
+      {% if error %}<div class="notification is-danger is-light mt-3">{{ error }}</div>{% endif %}
+    </div>
+
+    <div class="box experiment-detail-score-card">
+      <p class="heading">Score overview</p>
+      <h2 class="title is-5">Key metrics</h2>
+      <div class="experiment-metric-grid">
+        <div class="box metric-box"><p class="heading label-with-help">Composite score <span class="help-tooltip" tabindex="0" aria-label="Overall quality score for the run." data-tooltip="Overall quality score for the run. Higher values indicate stronger retrieval performance.">?</span></p><p class="title is-4">{{ "%.4f"|format(composite_score) if composite_score is not none else "—" }}</p></div>
+        <div class="box metric-box"><p class="heading label-with-help">Baseline score <span class="help-tooltip" tabindex="0" aria-label="Reference score used for comparison." data-tooltip="Reference score used for comparison. This run needs to beat it to show improvement.">?</span></p><p class="title is-4">{{ "%.4f"|format(baseline_score) if baseline_score is not none else "—" }}</p></div>
+        <div class="box metric-box"><p class="heading label-with-help">Δ vs baseline <span class="help-tooltip" tabindex="0" aria-label="Difference between this run and the baseline." data-tooltip="Difference between this run and the baseline. Positive values mean the run performed better.">?</span></p><p class="title is-4">{{ "%+.4f"|format(delta_vs_baseline) if delta_vs_baseline is not none else "—" }}</p></div>
+      </div>
+      <div class="table-container mt-3">
+        <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+          <tbody>{% for row in metric_rows %}<tr><td>{{ row.label }}</td><td>{{ row.display }}</td></tr>{% endfor %}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="box experiment-question-card">
+      <div class="is-flex is-justify-content-space-between is-align-items-flex-end is-flex-wrap-wrap gap-2 mb-3">
+        <div><p class="heading">Question-level results</p><h2 class="title is-5">Evaluation details</h2></div>
+        <span class="tag is-light">Accuracy: {% if question_accuracy_pct is not none %}{{ "%.1f%%"|format(question_accuracy_pct) }}{% else %}n/a{% endif %}</span>
+      </div>
+      {% if question_rows %}
+        <div class="table-container">
+          <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+            <thead><tr><th>Question ID</th><th>Outcome</th><th>Latency</th><th>Docs</th><th>Answer preview</th></tr></thead>
+            <tbody>
+              {% for row in question_rows %}
+                <tr><td><code>{{ row.question_id }}</code></td><td>{% if row.outcome == "Correct" %}<span class="tag is-success is-light">Correct</span>{% elif row.outcome == "Incorrect" %}<span class="tag is-danger is-light">Incorrect</span>{% else %}<span class="tag is-light">Unknown</span>{% endif %}</td><td>{{ "%.2f"|format(row.latency_ms) if row.latency_ms is not none else "—" }}</td><td>{{ row.document_count }}</td><td>{{ row.answer_preview }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="notification is-light">No question-level results recorded.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}
