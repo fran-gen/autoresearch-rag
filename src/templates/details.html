@@ -1,0 +1,39 @@
+{% extends "logged_in.html" %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">User details</p>
+        <h1 class="title is-3 mb-2">Profile details</h1>
+      </div>
+    </div>
+  </section>
+
+  <div class="box content">
+    <p><strong>Avatar:</strong></p>
+    {% if user_picture %}
+      <figure class="image is-128x128 mb-5">
+        <img class="is-rounded" src="{{ user_picture }}" alt="User avatar">
+      </figure>
+    {% else %}
+      <p>(No avatar)</p>
+    {% endif %}
+
+    <p><strong>Given name:</strong></p>
+    <input class="input mb-4" value="{{ user_given_name }}" disabled>
+
+    <p><strong>Family name:</strong></p>
+    <input class="input mb-4" value="{{ user_family_name }}" disabled>
+
+    <p><strong>Email:</strong></p>
+    <input class="input mb-4" value="{{ user_email }}" disabled>
+
+    <p><strong>Access token:</strong></p>
+    <pre class="code-panel">{{ access_token }}</pre>
+
+    <div class="mt-5">
+      <a class="button is-link" href="{{ url_for('index') }}">Back to home</a>
+    </div>
+  </div>
+{% endblock %}

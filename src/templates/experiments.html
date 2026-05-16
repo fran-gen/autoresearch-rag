@@ -1,0 +1,793 @@
+{% extends "logged_in.html" %}
+
+{% block head %}
+  {% if live_mode or show_running_animation %}
+    <meta http-equiv="refresh" content="{{ refresh_every }}">
+  {% endif %}
+{% endblock %}
+
+{% block sidebar %}
+  <div class="notification is-light sidebar-panel">
+    <p class="has-text-weight-semibold mb-2">How to read this page</p>
+    <p class="is-size-7">Launch experiments at the top, then monitor scores and the iteration timeline below. Expand the registry at the bottom to compare past runs.</p>
+  </div>
+{% endblock %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Experiments</p>
+        <h1 class="title is-3 mb-2">Experiment workbench</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Configure, launch, monitor, and compare retrieval experiments.</p>
+      </div>
+    </div>
+    <div class="level-right">
+      <div class="tags are-medium">
+        <span class="tag {% if status and status.running %}is-success{% elif status and status.final_report %}is-link{% else %}is-light{% endif %}">
+          {% if status and status.running %}Running{% elif status and status.final_report %}Complete{% else %}Idle{% endif %}
+        </span>
+        {% if show_running_animation %}
+          <span class="tag is-info is-light">Updating status</span>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  {# ── Section 1: Launch controls ────────────────────────────────── #}
+  <div class="box page-block experiment-launch-card experiment-launch-card--focused">
+    <div class="experiment-launch-header">
+      <div>
+        <p class="heading">Start a new experiment</p>
+        <h2 class="title is-4 mb-2">Pick how the next run should improve retrieval</h2>
+        <p class="section-hint mb-0">Choose a research mode first, then tune the iteration budget and launch. The question focus and dataset are set on the <a href="{{ url_for('index') }}">Overview</a> page.</p>
+      </div>
+      <div class="experiment-launch-status">
+        <span class="tag {% if status and status.running %}is-success{% else %}is-light{% endif %}">
+          {% if status and status.running %}Run active{% else %}Ready to launch{% endif %}
+        </span>
+        <p class="is-size-7 has-text-grey mt-2 mb-0">Last update: {{ last_update }}</p>
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('start_research') }}">
+      <div class="launch-mode-grid" aria-label="Research mode">
+        <label class="mode-toggle-card {% if not research_mode or research_mode == 'config' %}mode-toggle-card--active{% endif %}" for="mode_config">
+          <input type="radio" id="mode_config" name="research_mode" value="config" {% if not research_mode or research_mode == 'config' %}checked{% endif %} onchange="toggleMode(true)">
+          <span class="mode-icon">CO</span>
+          <span class="mode-copy">
+            <span class="mode-title">Config Optimization</span>
+            <span class="mode-description">Tune retrieval settings from the selected starting configuration.</span>
+            <span class="tag is-link is-light mode-tag">Best for parameter search</span>
+          </span>
+        </label>
+
+        <label class="mode-toggle-card {% if research_mode == 'karpathy' %}mode-toggle-card--active{% endif %}" for="mode_karpathy">
+          <input type="radio" id="mode_karpathy" name="research_mode" value="karpathy" {% if research_mode == 'karpathy' %}checked{% endif %} onchange="toggleMode(true)">
+          <span class="mode-icon">KM</span>
+          <span class="mode-copy">
+            <span class="mode-title">Karpathy Mode</span>
+            <span class="mode-description">Iterate directly on the session pipeline code and review code or diff.</span>
+            <span class="tag is-warning is-light mode-tag">Best for code changes</span>
+          </span>
+        </label>
+      </div>
+
+      <div class="launch-workbench-grid">
+        {# Config mode: starting config panel #}
+        <div class="launch-preview-panel" id="config-mode-panel">
+          <div class="research-dataset-card">
+            <div class="launch-panel-title">
+              <div>
+                <p class="heading">Mode setup</p>
+                <h3 class="title is-6 mb-1">Starting config: auto best fit</h3>
+                <p class="field-hint mb-0">Based on your question focus. Change it on the <a href="{{ url_for('index') }}">Overview</a> page.</p>
+              </div>
+              <span class="tag is-light">Config</span>
+            </div>
+            <pre class="code-panel research-config-preview" id="starting-config-preview">{{ default_starting_config | tojson(indent=2) }}</pre>
+          </div>
+        </div>
+        {# Karpathy mode: session-scoped pipeline.py preview panel with Code/Diff tabs #}
+        <div class="launch-preview-panel" id="karpathy-mode-panel" style="display:none;">
+          <div class="research-dataset-card karpathy-pipeline-card">
+            <div class="launch-panel-title mb-2">
+              <div>
+                <p class="heading mb-0">Mode setup</p>
+                <h3 class="title is-6 mb-1">Session pipeline: src/retrieval/pipeline.py</h3>
+                <p class="field-hint mb-0">{{ pipeline_display_label or 'Current accepted code' }}</p>
+              </div>
+              {% if status and status.run_id %}
+                <span class="tag is-info is-light">{{ status.run_id }}</span>
+              {% endif %}
+            </div>
+
+            <div class="karpathy-tabs">
+              <button type="button" class="karpathy-tab karpathy-tab--active" data-tab="code" onclick="switchKarpathyTab('code')">Code</button>
+              <button type="button" class="karpathy-tab" data-tab="diff" onclick="switchKarpathyTab('diff')">Diff</button>
+            </div>
+
+            <div class="karpathy-tab-content" id="karpathy-tab-code">
+              <pre class="code-panel research-config-preview" style="max-height:280px; overflow-y:auto;">{{ pipeline_display_code or 'No pipeline code loaded yet.' }}</pre>
+            </div>
+
+            <div class="karpathy-tab-content" id="karpathy-tab-diff" style="display:none;">
+              {% if pipeline_diff %}
+                <pre class="code-panel diff-panel" style="max-height:280px; overflow-y:auto;">{% for line in pipeline_diff.split('\n') %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+{% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
+{% else %}<span class="diff-context">{{ line }}</span>
+{% endif %}{% endfor %}</pre>
+              {% else %}
+                <div class="notification is-light is-size-7">No pending or accepted changes yet.</div>
+              {% endif %}
+            </div>
+
+            <p class="field-hint mt-3 mb-0">Accepted edits are scoped to this run and evaluated in Docker. Commits are disabled in the demo environment.</p>
+          </div>
+        </div>
+
+        <div class="launch-controls-panel">
+          <div class="research-dataset-card launch-run-card">
+            <p class="heading">Run settings</p>
+            <label class="label is-small label-with-help" for="max_iterations">
+              Iterations
+              <span class="help-tooltip" tabindex="0" aria-label="Maximum research attempts before the loop stops." data-tooltip="Maximum research attempts before the loop stops. More iterations can improve results but take longer.">?</span>
+            </label>
+            <div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
+              <span class="is-size-7 has-text-grey">Max iterations</span>
+              <span class="tag is-light" id="max_iterations_value">{{ selected_max_iterations }}</span>
+            </div>
+            <input class="slider is-fullwidth" type="range" id="max_iterations" name="max_iterations" min="1" max="100" value="{{ selected_max_iterations }}" oninput="onIterationsChange(this.value)" onchange="persistResearchControls()">
+
+            <input type="hidden" name="refresh" value="{{ refresh_every }}">
+            <input type="hidden" name="live" value="{{ 1 if live_mode else 0 }}">
+            <input type="hidden" name="question_focus" value="{{ selected_question_focus or 'all' }}">
+            <input type="hidden" name="dataset_source" value="{{ 'upload' if use_uploaded_dataset else 'built_in' }}">
+
+            <button class="button is-link is-medium is-fullwidth mt-5" type="submit" {% if status and status.running %}disabled{% endif %}>
+              <span id="start-button-mode">Start experiment</span>
+            </button>
+          </div>
+
+          <div class="research-dataset-card launch-focus-card">
+            <p class="heading">Current focus</p>
+            <h3 class="title is-6">{{ selected_question_focus_label or 'Generic mix' }}</h3>
+            <p class="field-hint mb-2">{{ question_type_options | length }} categories available</p>
+            <p class="field-hint mb-3">Dataset: {{ uploaded_dataset_label if use_uploaded_dataset else 'Built-in test dataset' }}</p>
+            <a class="button is-light is-small" href="{{ url_for('index') }}">Change focus</a>
+          </div>
+        </div>
+      </div>
+    </form>
+
+    {% if status and status.max_iterations %}
+      {% set iteration = status.iteration if status.iteration is defined and status.iteration is not none else 0 %}
+      {% set max_iterations = status.max_iterations if status.max_iterations is defined and status.max_iterations else 0 %}
+      {% set progress = (iteration / max_iterations * 100) | int %}
+      <div class="mt-5">
+        <div class="is-flex is-justify-content-space-between is-size-7 has-text-grey mb-2">
+          <span>Phase: {{ status.phase if status.phase else 'idle' }}</span>
+          <span>{{ iteration }}/{{ max_iterations }}</span>
+        </div>
+        <progress class="progress is-link" value="{{ progress }}" max="100">{{ progress }}%</progress>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if error and not show_running_animation %}
+    <div class="notification is-danger is-light mt-4">Failed to load status: {{ error }}</div>
+  {% elif not status and not show_running_animation %}
+    <div class="notification is-info is-light mt-4">No active experiment run in this session yet. Start an experiment above to populate status.</div>
+  {% endif %}
+
+  {# ── Section 2: Score signal cards (hidden until real data arrives) #}
+  {% set has_scores = initial_baseline is not none and initial_baseline >= 0 %}
+  {% if has_scores %}
+    <div class="score-signal-grid page-block">
+      <div class="score-signal-card score-signal-card--baseline">
+        <div class="score-signal-card__icon" aria-hidden="true">◎</div>
+        <div>
+          <p class="heading label-with-help">Baseline <span class="help-tooltip" tabindex="0" aria-label="The first measured score before optimization starts." data-tooltip="The first measured score before optimization starts. Later runs are compared against this value.">?</span></p>
+          <p class="score-signal-card__value">{{ "%.4f"|format(initial_baseline) }}</p>
+          <p class="score-signal-card__caption">Starting point</p>
+        </div>
+      </div>
+
+      <div class="score-signal-card score-signal-card--hero {% if best_delta is not none and best_delta >= 0 %}score-signal-card--up{% elif best_delta is not none %}score-signal-card--down{% endif %}">
+        <div class="score-orbit" aria-hidden="true"><span></span></div>
+        <div>
+          <p class="heading label-with-help">Best score <span class="help-tooltip" tabindex="0" aria-label="Highest composite score found so far." data-tooltip="Highest composite score found so far across completed runs.">?</span></p>
+          <p class="score-signal-card__value">{{ "%.4f"|format(best_score) if best_score is not none and best_score >= 0 else "—" }}</p>
+          <p class="score-signal-card__caption">
+            {% if best_delta is not none %}
+              {{ "%+.4f"|format(best_delta) }} vs baseline
+            {% else %}
+              Waiting for completed runs
+            {% endif %}
+          </p>
+        </div>
+      </div>
+
+      <div class="score-signal-card {% if improvement_pct is not none and improvement_pct >= 0 %}score-signal-card--lift{% elif improvement_pct is not none %}score-signal-card--drop{% else %}score-signal-card--neutral{% endif %}">
+        <div class="score-signal-card__icon" aria-hidden="true">{% if improvement_pct is not none and improvement_pct >= 0 %}↗{% elif improvement_pct is not none %}↘{% else %}→{% endif %}</div>
+        <div>
+          <p class="heading label-with-help">Lift <span class="help-tooltip" tabindex="0" aria-label="Percent change from baseline to the best run." data-tooltip="Percent change from the baseline score to the best run. Positive values mean the loop improved retrieval quality.">?</span></p>
+          <p class="score-signal-card__value">{{ "%+.1f%%"|format(improvement_pct) if improvement_pct is not none else "—" }}</p>
+          <p class="score-signal-card__caption">{% if improvement_pct is not none and improvement_pct >= 0 %}Performance trending up{% elif improvement_pct is not none %}Needs more tuning{% else %}No comparison yet{% endif %}</p>
+        </div>
+      </div>
+
+      <div class="score-signal-card score-signal-card--accepted">
+        <div class="score-signal-card__icon" aria-hidden="true">✓</div>
+        <div>
+          <p class="heading label-with-help">Accepted <span class="help-tooltip" tabindex="0" aria-label="Runs that beat the current baseline and were kept." data-tooltip="Runs that improved the current baseline enough to become the new candidate configuration.">?</span></p>
+          <p class="score-signal-card__value">{{ status.accepted_experiments if status else 0 }}</p>
+          <p class="score-signal-card__caption">Kept improvements</p>
+        </div>
+      </div>
+
+      <div class="score-signal-card score-signal-card--rejected">
+        <div class="score-signal-card__icon" aria-hidden="true">×</div>
+        <div>
+          <p class="heading label-with-help">Rejected <span class="help-tooltip" tabindex="0" aria-label="Runs that did not improve the baseline." data-tooltip="Runs that failed to improve the candidate configuration and were not adopted.">?</span></p>
+          <p class="score-signal-card__value">{{ status.rejected_experiments if status else 0 }}</p>
+          <p class="score-signal-card__caption">Learned from misses</p>
+        </div>
+      </div>
+    </div>
+  {% elif status and status.running %}
+    <div class="notification is-info is-light page-block">
+      Waiting for the first iteration to complete before showing scores...
+    </div>
+  {% endif %}
+
+  {# ── Section 3: Score progression chart ────────────────────────── #}
+  <div class="box page-block experiment-score-card">
+    <div class="level is-mobile mb-4">
+      <div class="level-left">
+        <div>
+          <p class="heading">Score progression</p>
+          <h2 class="title is-5">Iteration outcomes</h2>
+          <p class="section-hint">Shows each run score so you can see whether optimization is moving in the right direction. Verdicts compare against the iteration incumbent shown in the tooltip.</p>
+        </div>
+      </div>
+    </div>
+
+    {% if score_history_rows %}
+      <div class="chart-canvas-wrap">
+        <canvas id="dashboard-score-chart" aria-label="Score progression chart"></canvas>
+      </div>
+      {% if has_scores %}
+        <p class="is-size-7 has-text-grey mt-3">Baseline reference: {{ "%.4f"|format(initial_baseline) }}</p>
+      {% endif %}
+    {% elif status and status.running %}
+      <div class="notification is-light">Experiment is running. Scores will appear after the first iteration completes.</div>
+    {% else %}
+      <div class="notification is-light">Start an experiment above to see score progression.</div>
+    {% endif %}
+  </div>
+
+  {# ── Section 4: Current status ──────────────────────────────────── #}
+  <div class="box page-block experiment-status-card">
+    <div class="experiment-status-header">
+      <div>
+        <p class="heading">Run details</p>
+        <h2 class="title is-5 mb-1">Current status</h2>
+        <p class="section-hint mb-0">Latest loop output and planner reasoning, expanded across the page so long updates are readable.</p>
+      </div>
+      <span class="tag {% if status and status.running %}is-success{% elif status and status.final_report %}is-link{% else %}is-light{% endif %}">
+        {% if status and status.running %}Running{% elif status and status.final_report %}Complete{% else %}Idle{% endif %}
+      </span>
+    </div>
+
+    <div class="experiment-status-grid {% if not (status and status.planner_rationale) %}experiment-status-grid--single{% endif %}">
+      <div class="notification is-light status-card status-card--primary">
+        <p class="has-text-weight-semibold mb-2">Latest experiment result</p>
+        <p>{{ status.latest_summary if status and status.latest_summary else "No updates yet." }}</p>
+        {% if status and status.last_error %}
+          <p class="has-text-danger mt-3">Last error: {{ status.last_error }}</p>
+        {% endif %}
+      </div>
+
+      {% if status and status.planner_rationale %}
+        <div class="notification is-light status-card">
+          <p class="has-text-weight-semibold mb-2">Planner reasoning</p>
+          <p>{{ status.planner_rationale }}</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Section 5: Research journey ───────────────────────────────── #}
+  <div class="box page-block experiment-timeline-card">
+        <div class="level is-mobile mb-4">
+          <div class="level-left">
+            <div>
+              <p class="heading">Research journey</p>
+              <h2 class="title is-5">Iteration timeline</h2>
+              <p class="section-hint">Changed configuration values are highlighted so you can connect decisions to score movement.</p>
+            </div>
+          </div>
+        </div>
+
+        {% if baseline_config_items %}
+          <div class="journey-entry journey-entry--baseline">
+            <div class="journey-entry__header">
+              <strong>Starting point</strong>
+            </div>
+            <div class="pill-list">
+              {% for item in baseline_config_items %}
+                <span class="tag is-light config-pill">{{ item.key }}={{ item.value }}</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+
+        {% if initial_baseline is not none %}
+          <div class="journey-entry journey-entry--baseline">
+            <div class="journey-entry__header">
+              <strong>Baseline score</strong>
+              <span>{{ "%.4f"|format(initial_baseline) }}</span>
+            </div>
+            <p class="is-size-7 has-text-grey mb-0">Measured on first A/B evaluation.</p>
+          </div>
+        {% endif %}
+
+        {% if not journey_entries and not baseline_config_items %}
+          {% if status and status.running %}
+            <div class="notification is-light">Experiment is running. The timeline will populate as iterations complete.</div>
+          {% else %}
+            <div class="notification is-light">Start an experiment to see the iteration journey here.</div>
+          {% endif %}
+        {% endif %}
+
+        {% if research_mode == 'karpathy' and code_history %}
+          {# ── Karpathy mode: code-diff timeline ── #}
+          {% for entry in code_history %}
+            <div class="journey-entry journey-entry--karpathy journey-entry--{{ 'accepted' if entry.accepted else 'rejected' }}">
+              <div class="journey-entry__header">
+                <strong>{{ '✅' if entry.accepted else '❌' }} Iteration {{ entry.iteration }}</strong>
+                {% if entry.score is not none %}
+                  <span>{{ "%.4f"|format(entry.score) }}</span>
+                {% endif %}
+              </div>
+              {% if entry.hypothesis %}
+                <p class="mb-2"><strong>Hypothesis:</strong> {{ entry.hypothesis }}</p>
+              {% endif %}
+              {% if entry.diff_summary %}
+                <details class="diff-details">
+                  <summary class="is-size-7 has-text-link">Show code diff</summary>
+                  <pre class="code-panel diff-panel">{% for line in entry.diff_summary.split('\n') %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="diff-add">{{ line }}</span>
+{% elif line.startswith('-') and not line.startswith('---') %}<span class="diff-del">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
+{% else %}<span class="diff-context">{{ line }}</span>
+{% endif %}{% endfor %}</pre>
+                </details>
+              {% endif %}
+              {% if entry.proposed_code %}
+                <details class="diff-details">
+                  <summary class="is-size-7 has-text-link">Show full code</summary>
+                  <pre class="code-panel" style="max-height:260px; overflow-y:auto;">{{ entry.proposed_code }}</pre>
+                </details>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          {# ── Config mode: normal journey entries ── #}
+          {% for entry in journey_entries %}
+            <div class="journey-entry journey-entry--{{ 'accepted' if entry.accepted else 'rejected' }}">
+              <div class="journey-entry__header">
+                <strong>{{ entry.icon }} Iteration {{ entry.iteration }}</strong>
+                {% if entry.score is not none %}
+                  <span>
+                    {{ "%.4f"|format(entry.score) }}
+                    {% if entry.delta is not none and entry.baseline is not none %}
+                      ({{ "%+.4f"|format(entry.delta) }} vs {{ "%.4f"|format(entry.baseline) }})
+                    {% endif %}
+                  </span>
+                {% endif %}
+              </div>
+
+              {% if entry.hypothesis %}
+                <p class="mb-3"><strong>Hypothesis:</strong> {{ entry.hypothesis }}</p>
+              {% endif %}
+
+              <div class="pill-list">
+                {% if entry.config_items %}
+                  {% for item in entry.config_items %}
+                    <span class="tag is-light config-pill{% if item.changed %} config-pill--changed{% endif %}">{{ item.key }}={{ item.value }}</span>
+                  {% endfor %}
+                {% else %}
+                  <span class="is-size-7 has-text-grey">Same as baseline</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        {% endif %}
+
+        {% if status and status.final_report %}
+          <div class="report-card mt-4">
+            <p class="has-text-weight-semibold mb-2">Research report</p>
+            <p>{{ status.final_report }}</p>
+          </div>
+        {% endif %}
+  </div>
+
+  {# ── Section 6: Signals and exports ─────────────────────────────── #}
+  <div class="box page-block run-details-card run-details-card--wide">
+        <p class="heading">Run details</p>
+        <h2 class="title is-5">Signals and exports</h2>
+
+        <div class="insight-grid mb-4">
+          <div class="insight-card insight-card--recommendation">
+            <p class="heading">Recommended next action</p>
+            <p>{{ recommendation or "Run the first experiment to generate a recommendation." }}</p>
+          </div>
+          <div class="insight-card">
+            <p class="heading">Holdout validation</p>
+            <p>{{ validation_summary or "No holdout validation yet." }}</p>
+          </div>
+        </div>
+
+        <div class="insight-card mb-4">
+          <p class="heading">Export</p>
+          <div class="buttons are-small mb-0">
+            <a class="button is-light" href="{{ url_for('export_dashboard_artifact', kind='report') }}">Report</a>
+            <a class="button is-light" href="{{ url_for('export_dashboard_artifact', kind='config') }}">Config</a>
+            <a class="button is-light" href="{{ url_for('export_dashboard_artifact', kind='failures') }}">Failures</a>
+          </div>
+        </div>
+
+        <div class="insight-card mb-4">
+          <p class="heading">Dataset readiness</p>
+          <div class="sidebar-stat-grid mt-2">
+            {% for row in dataset_readiness_rows %}
+              <div>
+                <span>{{ row.value }}</span>
+                <small>{{ row.label }}</small>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="insight-card mb-4">
+          <p class="heading">Failure taxonomy</p>
+          <div class="taxonomy-stack">
+            {% for row in taxonomy_rows %}
+              <div class="taxonomy-row">
+                <div class="is-flex is-justify-content-space-between mb-1">
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.count }}</strong>
+                </div>
+                <div class="sidebar-progress-track"><span style="width: {{ row.pct }}%"></span></div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        {% if status and status.failure_examples %}
+          <div class="details-panel details-panel--compact mb-4">
+            <div class="is-flex is-justify-content-space-between is-align-items-center is-flex-wrap-wrap gap-2">
+              <div>
+                <p class="has-text-weight-semibold mb-1">Failure drilldown</p>
+                <p class="field-hint mb-0">Inspect the weakest questions and expected vs retrieved docs.</p>
+              </div>
+              <button class="button is-light is-small js-modal-trigger" type="button" data-target="failure-drilldown-modal">Open failures</button>
+            </div>
+          </div>
+          <div class="modal config-modal" id="failure-drilldown-modal" aria-hidden="true">
+            <div class="modal-background js-modal-close"></div>
+            <div class="modal-card config-modal-card">
+              <header class="modal-card-head">
+                <p class="modal-card-title">Failure drilldown</p>
+                <button class="delete js-modal-close" type="button" aria-label="close"></button>
+              </header>
+              <section class="modal-card-body">
+                {% for item in status.failure_examples %}
+                  <article class="source-card mb-3">
+                    <p class="has-text-weight-semibold mb-2">{{ item.question_id }} · {{ item.question_type }}</p>
+                    <p class="mb-2">{{ item.question }}</p>
+                    <p class="is-size-7 has-text-grey">Expected: {{ item.expected_doc_ids | join(', ') }}</p>
+                    <p class="is-size-7 has-text-grey">Retrieved: {{ item.retrieved_doc_ids | join(', ') }}</p>
+                    <span class="tag is-light mt-2">recall {{ "%.3f"|format(item.recall) if item.recall is defined and item.recall is not none else "—" }}</span>
+                  </article>
+                {% endfor %}
+              </section>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if candidate_config_items %}
+          <div class="details-panel details-panel--compact mb-4">
+            <div class="is-flex is-justify-content-space-between is-align-items-center is-flex-wrap-wrap gap-2">
+              <div>
+                <p class="has-text-weight-semibold mb-1">Current candidate config</p>
+                <p class="field-hint mb-0">Review changed retrieval settings without stretching this card.</p>
+              </div>
+              <button class="button is-light is-small js-modal-trigger" type="button" data-target="candidate-config-modal">View config</button>
+            </div>
+          </div>
+
+          <div class="modal config-modal" id="candidate-config-modal" aria-hidden="true">
+            <div class="modal-background js-modal-close"></div>
+            <div class="modal-card config-modal-card">
+              <header class="modal-card-head">
+                <div>
+                  <p class="modal-card-title">Current candidate config</p>
+                  <p class="field-hint mb-0">Changed values are highlighted.</p>
+                </div>
+                <button class="delete js-modal-close" type="button" aria-label="close"></button>
+              </header>
+              <section class="modal-card-body">
+              <div class="pill-list mb-4">
+                {% for item in candidate_config_items %}
+                  <span class="tag is-light config-pill{% if item.changed %} config-pill--changed{% endif %}">{{ item.key }}={{ item.value }}</span>
+                {% endfor %}
+              </div>
+              <pre class="code-panel">{{ status.candidate_config | tojson(indent=2) }}</pre>
+              </section>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if per_type_rows %}
+          <div class="notification is-light">
+            <p class="has-text-weight-semibold mb-1 label-with-help">Retrieval by question type <span class="help-tooltip" tabindex="0" aria-label="Recall and precision grouped by benchmark question type." data-tooltip="Recall shows whether relevant documents were retrieved. Precision shows how much of the retrieved context was useful.">?</span></p>
+            <p class="field-hint mb-3">Use this to spot categories where retrieval quality is weaker.</p>
+            <div class="chart-canvas-wrap chart-canvas-wrap--small mb-4">
+              <canvas id="per-type-chart" aria-label="Retrieval by question type chart"></canvas>
+            </div>
+            <div class="table-container">
+              <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Recall</th>
+                    <th>Precision</th>
+                    <th>Questions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in per_type_rows %}
+                    <tr>
+                      <td>{{ row.name }}</td>
+                      <td>
+                        <div class="metric-progress">
+                          <progress class="progress is-info is-small mb-2" value="{{ row.recall * 100 }}" max="100">{{ row.recall * 100 }}</progress>
+                          <span class="metric-progress__value">{{ "%.3f"|format(row.recall) }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="metric-progress">
+                          <progress class="progress is-success is-small mb-2" value="{{ row.precision * 100 }}" max="100">{{ row.precision * 100 }}</progress>
+                          <span class="metric-progress__value">{{ "%.3f"|format(row.precision) }}</span>
+                        </div>
+                      </td>
+                      <td>{{ row.questions }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {% endif %}
+  </div>
+
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    function switchKarpathyTab(tab) {
+      document.querySelectorAll('.karpathy-tab').forEach(function (btn) {
+        btn.classList.toggle('karpathy-tab--active', btn.dataset.tab === tab);
+      });
+      document.querySelectorAll('.karpathy-tab-content').forEach(function (el) {
+        el.style.display = 'none';
+      });
+      var target = document.getElementById('karpathy-tab-' + tab);
+      if (target) target.style.display = '';
+    }
+
+    function persistResearchControls() {
+      var isKarpathy = document.getElementById('mode_karpathy').checked;
+      var iterationsInput = document.getElementById('max_iterations');
+      var maxIterations = iterationsInput ? iterationsInput.value : '5';
+      try {
+        localStorage.setItem('lab_research_mode', isKarpathy ? 'karpathy' : 'config');
+        localStorage.setItem('lab_max_iterations', maxIterations);
+      } catch (e) {}
+      fetch('{{ url_for("save_research_mode") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'research_mode=' + encodeURIComponent(isKarpathy ? 'karpathy' : 'config') +
+          '&max_iterations=' + encodeURIComponent(maxIterations),
+      }).catch(function () {});
+    }
+
+    function toggleMode(save) {
+      var isKarpathy = document.getElementById('mode_karpathy').checked;
+      var configPanel = document.getElementById('config-mode-panel');
+      var karpathyPanel = document.getElementById('karpathy-mode-panel');
+      if (configPanel) configPanel.style.display = isKarpathy ? 'none' : '';
+      if (karpathyPanel) karpathyPanel.style.display = isKarpathy ? '' : 'none';
+      document.querySelectorAll('.mode-toggle-card').forEach(function (card) {
+        card.classList.remove('mode-toggle-card--active');
+      });
+      var activeId = isKarpathy ? 'mode_karpathy' : 'mode_config';
+      var activeLabel = document.querySelector('label[for="' + activeId + '"]');
+      if (activeLabel) activeLabel.classList.add('mode-toggle-card--active');
+      var startLabel = document.getElementById('start-button-mode');
+      if (startLabel) startLabel.textContent = isKarpathy ? 'Start Karpathy Mode' : 'Start Config Optimization';
+      if (save) persistResearchControls();
+    }
+
+    function onIterationsChange(val) {
+      document.getElementById('max_iterations_value').textContent = val;
+      try { localStorage.setItem('lab_max_iterations', val); } catch (e) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      try {
+        var savedMode = localStorage.getItem('lab_research_mode');
+        if (savedMode === 'karpathy') {
+          document.getElementById('mode_karpathy').checked = true;
+          document.getElementById('mode_config').checked = false;
+        }
+        var savedIter = localStorage.getItem('lab_max_iterations');
+        if (savedIter) {
+          var n = parseInt(savedIter, 10);
+          if (n >= 1 && n <= 100) {
+            document.getElementById('max_iterations').value = n;
+            document.getElementById('max_iterations_value').textContent = n;
+          }
+        }
+      } catch (e) {}
+      onIterationsChange(document.getElementById('max_iterations').value);
+      toggleMode(false);
+    });
+  </script>
+
+  {% if score_history_rows %}
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        var canvas = document.getElementById('dashboard-score-chart');
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        var annotationPlugin = window['chartjs-plugin-annotation'];
+        if (annotationPlugin) {
+          try { Chart.register(annotationPlugin); } catch (e) {}
+        }
+
+        var rows = {{ score_history_rows | tojson }};
+        var baselineValue = {{ initial_baseline | tojson }};
+        var scores = rows.map(function (r) { return r.score; });
+        var barColors = rows.map(function (r) {
+          return r.accepted ? 'rgba(34, 197, 94, 0.85)' : 'rgba(239, 68, 68, 0.85)';
+        });
+        var borderColors = rows.map(function (r) {
+          return r.accepted ? 'rgba(34, 197, 94, 1)' : 'rgba(239, 68, 68, 1)';
+        });
+        var formatScore = function (v) { return typeof v === 'number' ? v.toFixed(4) : '—'; };
+
+        new Chart(canvas, {
+          type: 'bar',
+          data: {
+            labels: rows.map(function (r) { return r.label; }),
+            datasets: [
+              {
+                label: 'Score',
+                data: scores,
+                backgroundColor: barColors,
+                borderColor: borderColors,
+                borderWidth: 1, borderRadius: 8, maxBarThickness: 48,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: {
+                display: true,
+                labels: {
+                  generateLabels: function () {
+                    return [
+                      { text: 'Accepted', fillStyle: 'rgba(34, 197, 94, 0.85)', strokeStyle: 'rgba(34, 197, 94, 1)', lineWidth: 1 },
+                      { text: 'Rejected', fillStyle: 'rgba(239, 68, 68, 0.85)', strokeStyle: 'rgba(239, 68, 68, 1)', lineWidth: 1 },
+                    ];
+                  },
+                },
+              },
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) { return 'Score: ' + formatScore(ctx.parsed.y); },
+                  afterBody: function (items) {
+                    var r = rows[items[0].dataIndex];
+                    var lines = ['Incumbent: ' + formatScore(r.baseline)];
+                    if (r.validation_delta !== null && r.validation_delta !== undefined) {
+                      var holdout = typeof r.validation_delta === 'number' ? r.validation_delta.toFixed(4) : '—';
+                      lines.push('Holdout Δ: ' + holdout);
+                    }
+                    lines.push('Verdict: ' + r.result_label);
+                    if (r.reason) lines.push(r.reason);
+                    return lines;
+                  },
+                },
+              },
+              annotation: baselineValue !== null && baselineValue >= 0 ? {
+                annotations: {
+                  baseline: {
+                    type: 'line', yMin: baselineValue, yMax: baselineValue,
+                    borderColor: '#dc244c', borderWidth: 2, borderDash: [6, 6],
+                    label: { display: true, content: 'Baseline: ' + formatScore(baselineValue), position: 'end', backgroundColor: 'rgba(28, 31, 39, 0.92)', color: '#fecdd3' },
+                  },
+                },
+              } : undefined,
+            },
+            scales: {
+              x: { title: { display: true, text: 'Iteration' }, grid: { display: false } },
+              y: { beginAtZero: true, title: { display: true, text: 'Composite Score' } },
+            },
+          },
+        });
+      });
+    </script>
+  {% endif %}
+
+  {% if per_type_rows %}
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        var canvas = document.getElementById('per-type-chart');
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        var rows = {{ per_type_rows | tojson }};
+
+        new Chart(canvas, {
+          type: 'bar',
+          data: {
+            labels: rows.map(function (r) { return r.name; }),
+            datasets: [
+              {
+                label: 'Recall',
+                data: rows.map(function (r) { return r.recall; }),
+                backgroundColor: 'rgba(220, 36, 76, 0.82)',
+                borderColor: 'rgba(220, 36, 76, 1)',
+                borderWidth: 1, borderRadius: 8,
+              },
+              {
+                label: 'Precision',
+                data: rows.map(function (r) { return r.precision; }),
+                backgroundColor: 'rgba(34, 197, 94, 0.82)',
+                borderColor: 'rgba(34, 197, 94, 1)',
+                borderWidth: 1, borderRadius: 8,
+              },
+            ],
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) { return ctx.dataset.label + ': ' + ctx.parsed.x.toFixed(3); },
+                  afterBody: function (items) {
+                    var r = rows[items[0].dataIndex];
+                    return ['Questions: ' + r.questions];
+                  },
+                },
+              },
+            },
+            scales: {
+              x: { min: 0, max: 1, title: { display: true, text: 'Score' } },
+              y: { grid: { display: false } },
+            },
+          },
+        });
+      });
+    </script>
+  {% endif %}
+{% endblock %}

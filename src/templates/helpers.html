@@ -1,0 +1,53 @@
+{% extends "logged_in.html" %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Helper functions</p>
+        <h1 class="title is-3 mb-2">Helper values</h1>
+      </div>
+    </div>
+  </section>
+
+  <div class="box">
+    <div class="field">
+      <label class="label">Get claim</label>
+      <input class="input" value="{{ claim }}" disabled>
+    </div>
+
+    <div class="field">
+      <label class="label">Organization</label>
+      <input class="input" value="{{ organization }}" disabled>
+    </div>
+
+    <div class="field">
+      <label class="label">User organizations</label>
+      <input class="input" value="{{ user_organizations }}" disabled>
+    </div>
+
+    <div class="field">
+      <label class="label">Get flag (theme)</label>
+      <input class="input" value="{{ flag }}" disabled>
+    </div>
+
+    <div class="field">
+      <label class="label">Get boolean flag (is_dark_mode)</label>
+      <input class="input" value="{{ bool_flag }}" disabled>
+    </div>
+
+    <div class="field">
+      <label class="label">Get string flag (theme)</label>
+      <input class="input" value="{{ str_flag }}" disabled>
+    </div>
+
+    <div class="field">
+      <label class="label">Get integer flag (competitions_limit)</label>
+      <input class="input" value="{{ int_flag }}" disabled>
+    </div>
+
+    <div class="mt-5">
+      <a class="button is-link" href="{{ url_for('index') }}">Back to home</a>
+    </div>
+  </div>
+{% endblock %}

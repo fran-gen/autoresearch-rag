@@ -1,0 +1,201 @@
+{% extends "logged_in.html" %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Experiment detail</p>
+        <h1 class="title is-3 mb-2">Search for a specific experiment</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Look up a run by experiment ID and open its experiment summary.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="box page-block experiment-search-hero">
+    <div class="experiment-search-hero__copy">
+      <p class="heading">Lookup</p>
+      <h2 class="title is-5 mb-1">Jump to an experiment</h2>
+      <p class="section-hint mb-0">Paste an experiment ID from the registry, leaderboard, or timeline.</p>
+    </div>
+
+    <form class="experiment-search-bar" method="post">
+      <label class="is-sr-only" for="exp_id">Experiment ID</label>
+      <span class="experiment-search-bar__icon" aria-hidden="true">ID</span>
+      <input class="input experiment-search-bar__input" type="text" id="exp_id" name="exp_id" placeholder="Search by experiment ID..." required autofocus>
+      <span class="help-tooltip experiment-search-bar__help" tabindex="0" aria-label="Unique identifier of an experiment run." data-tooltip="Unique identifier of an experiment run. You can copy it from the experiments table or leaderboard.">?</span>
+      <button class="button is-link experiment-search-bar__button" type="submit">View experiment</button>
+    </form>
+
+    {% if error %}
+      <div class="notification is-danger is-light experiment-search-error">{{ error }}</div>
+    {% endif %}
+  </div>
+
+  <div class="box page-block">
+    <p class="heading">Quick access</p>
+    <h2 class="title is-5">Latest runs</h2>
+    <p class="section-hint">Open one of the latest two research runs, with its experiments grouped together.</p>
+
+        {% if recent_error %}
+          <div class="notification is-warning is-light">{{ recent_error }}</div>
+        {% endif %}
+
+        {% if not recent_runs %}
+          <div class="notification is-light has-text-centered py-6">
+            No runs available yet.
+          </div>
+        {% else %}
+          <div class="run-access-list">
+            {% for run in recent_runs %}
+              <article class="run-access-card">
+                <div class="level is-mobile mb-3">
+                  <div class="level-left">
+                    <div>
+                      <p class="heading mb-1">{{ run.label }}</p>
+                      <p class="has-text-weight-semibold mb-1">
+                        {{ run.experiment_count }} experiment{% if run.experiment_count != 1 %}s{% endif %}
+                        {% if run.inferred %}
+                          <span class="tag is-light ml-2">inferred</span>
+                        {% endif %}
+                      </p>
+                      <p class="is-size-7 has-text-grey">Latest activity: {{ run.latest_created_at_display }}</p>
+                    </div>
+                  </div>
+                  <div class="level-right">
+                    {% if run.latest_experiment %}
+                      <a class="button is-small is-link is-light" href="{{ url_for('experiment_detail_search', exp_id=run.latest_experiment.id) }}">Open latest</a>
+                    {% endif %}
+                  </div>
+                </div>
+                <div class="run-experiment-list">
+                  {% for item in run.experiments %}
+                    <div class="run-experiment-item">
+                      <div>
+                        <p class="has-text-weight-semibold mb-1">
+                          {% if item.run_position %}#{{ item.run_position }} · {% endif %}{{ item.name }}
+                        </p>
+                        <p class="is-size-7 has-text-grey"><code>{{ item.id }}</code> · {{ item.created_at_display }}</p>
+                      </div>
+                      <a class="button is-small is-light" href="{{ url_for('experiment_detail_search', exp_id=item.id) }}">Open</a>
+                    </div>
+                  {% endfor %}
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% endif %}
+  </div>
+
+  {# ── Full run registry ──────────────────────────────────────────── #}
+  {% if experiment_run_groups %}
+    <div class="box page-block">
+      <div class="level is-mobile mb-4">
+        <div class="level-left">
+          <div>
+            <p class="heading">Registry</p>
+            <h2 class="title is-5">All tracked runs</h2>
+            <p class="section-hint">Runs group the experiments from the same research loop so setup, score movement, and acceptance are easier to compare.</p>
+          </div>
+        </div>
+        <div class="level-right">
+          <span class="tag is-light">{{ experiment_run_groups | length }} runs · {{ experiment_rows | length }} experiments</span>
+        </div>
+      </div>
+
+      {% if registry_error %}
+        <div class="notification is-danger is-light">{{ registry_error }}</div>
+      {% endif %}
+      {% if leaderboard_error %}
+        <div class="notification is-warning is-light">{{ leaderboard_error }} Score columns may be unavailable.</div>
+      {% endif %}
+
+      <div class="run-registry-list">
+        {% for run in experiment_run_groups %}
+          <section class="run-registry-group">
+            <div class="level is-mobile mb-3">
+              <div class="level-left">
+                <div>
+                  <p class="heading mb-1">{{ run.label }}</p>
+                  <h3 class="title is-6 mb-1">{{ run.experiment_count }} experiment{% if run.experiment_count != 1 %}s{% endif %}</h3>
+                  <p class="is-size-7 has-text-grey">
+                    Latest activity: {{ run.latest_created_at_display }}
+                    {% if run.accepted_count or run.rejected_count %}
+                      · {{ run.accepted_count }} accepted · {{ run.rejected_count }} rejected
+                    {% endif %}
+                  </p>
+                </div>
+              </div>
+              {% if run.inferred %}
+                <div class="level-right">
+                  <span class="tag is-light">legacy inferred</span>
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="table-container">
+              <table class="table is-fullwidth is-striped is-hoverable">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Experiment ID</th>
+                    <th>Hypothesis ID</th>
+                    <th>Strategy <span class="help-tooltip" tabindex="0" aria-label="Retrieval approach used by the run." data-tooltip="Retrieval approach used by the run, such as dense or hybrid search.">?</span></th>
+                    <th>Top-k <span class="help-tooltip" tabindex="0" aria-label="Number of documents retrieved per question." data-tooltip="Number of documents retrieved for each question before answer generation or evaluation.">?</span></th>
+                    <th>Questions <span class="help-tooltip" tabindex="0" aria-label="Benchmark questions evaluated by the run." data-tooltip="Benchmark questions evaluated by the run. More questions usually means more reliable scores.">?</span></th>
+                    <th>Score <span class="help-tooltip" tabindex="0" aria-label="Composite quality score for this run." data-tooltip="Composite quality score for this run. Higher values indicate stronger retrieval performance.">?</span></th>
+                    <th>Δ vs baseline <span class="help-tooltip" tabindex="0" aria-label="Score difference compared with baseline." data-tooltip="Score difference compared with the baseline. Positive values mean the run improved on the starting point.">?</span></th>
+                    <th>Accepted <span class="help-tooltip" tabindex="0" aria-label="Whether this run was adopted." data-tooltip="Accepted runs improved the candidate configuration; rejected runs were kept for analysis only.">?</span></th>
+                    <th>Created at</th>
+                    <th>Retrieval config</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for exp in run.experiments %}
+                    <tr>
+                      <td>{% if exp.run_position %}#{{ exp.run_position }} · {% endif %}{{ exp.name }}</td>
+                      <td><code>{{ exp.id }}</code></td>
+                      <td><code>{{ exp.hypothesis_id }}</code></td>
+                      <td>{{ exp.strategy if exp.strategy else "—" }}</td>
+                      <td>{{ exp.top_k if exp.top_k is not none else "—" }}</td>
+                      <td>{{ exp.question_count }}</td>
+                      <td>{{ "%.4f"|format(exp.score) if exp.score is not none else "—" }}</td>
+                      <td>{{ "%+.4f"|format(exp.delta_vs_baseline) if exp.delta_vs_baseline is not none else "—" }}</td>
+                      <td>
+                        {% if exp.accepted is sameas true %}
+                          <span class="tag is-success is-light">Yes</span>
+                        {% elif exp.accepted is sameas false %}
+                          <span class="tag is-danger is-light">No</span>
+                        {% else %}
+                          <span class="tag is-light">—</span>
+                        {% endif %}
+                      </td>
+                      <td>{{ exp.created_at_display }}</td>
+                      <td>
+                        <button class="button is-light is-small js-modal-trigger" type="button" data-target="experiment-config-modal-{{ exp.id }}">View config</button>
+                        <div class="modal config-modal" id="experiment-config-modal-{{ exp.id }}" aria-hidden="true">
+                          <div class="modal-background js-modal-close"></div>
+                          <div class="modal-card config-modal-card">
+                            <header class="modal-card-head">
+                              <div>
+                                <p class="modal-card-title">Retrieval config</p>
+                                <p class="field-hint mb-0">{{ exp.name }} · <code>{{ exp.id }}</code></p>
+                              </div>
+                              <button class="delete js-modal-close" type="button" aria-label="close"></button>
+                            </header>
+                            <section class="modal-card-body">
+                              <pre class="code-panel">{{ exp.config_json }}</pre>
+                            </section>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}
