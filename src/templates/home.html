@@ -1,0 +1,449 @@
+{% extends "logged_in.html" %}
+
+{% block sidebar %}
+  <div class="notification is-light sidebar-panel">
+    <p class="has-text-weight-semibold mb-2">Getting started</p>
+    <p class="is-size-7">Ask the AI copilot first, then choose a compact benchmark focus and optionally upload your own JSONL dataset.</p>
+  </div>
+{% endblock %}
+
+{% block main %}
+  <section class="level page-block overview-hero">
+    <div class="level-left">
+      <div>
+        <p class="heading">Overview</p>
+        <h1 class="title is-3 mb-2">Knowledge base command center</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Chat with the retriever, tune the benchmark focus, and launch experiments with either the demo data or your own dataset.</p>
+      </div>
+    </div>
+  </section>
+
+  {% if status and status.running %}
+    <div class="notification is-success is-light page-block">
+      <div class="is-flex is-justify-content-space-between is-align-items-center is-flex-wrap-wrap gap-2">
+        <div>
+          <p class="has-text-weight-semibold mb-1">Experiment in progress</p>
+          <p class="mb-0">
+            Phase: <strong>{{ status.phase or 'starting' }}</strong>
+            · Iteration {{ status.iteration or 0 }}/{{ status.max_iterations or '?' }}
+            {% if best_score is not none %} · Best score: <strong>{{ "%.4f"|format(best_score) }}</strong>{% endif %}
+          </p>
+        </div>
+        <a class="button is-success is-light is-small" href="{{ url_for('experiments') }}">View progress</a>
+      </div>
+    </div>
+  {% elif status and status.final_report %}
+    <div class="notification is-link is-light page-block">
+      <div class="is-flex is-justify-content-space-between is-align-items-center is-flex-wrap-wrap gap-2">
+        <div>
+          <p class="has-text-weight-semibold mb-1">Latest run complete</p>
+          <p class="mb-0">
+            Best score: <strong>{{ "%.4f"|format(best_score) if best_score is not none else "—" }}</strong>
+            {% if improvement_pct is not none %} · Lift: <strong>{{ "%+.1f%%"|format(improvement_pct) }}</strong>{% endif %}
+            {% if status.accepted_experiments %} · {{ status.accepted_experiments }} accepted{% endif %}
+          </p>
+        </div>
+        <a class="button is-link is-light is-small" href="{{ url_for('experiments') }}">View details</a>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="overview-top-grid page-block">
+    <div class="box overview-setup-card">
+    <form class="research-setup-form" id="research-setup-form" method="post" action="{{ url_for('save_focus') }}" enctype="multipart/form-data">
+      <div class="overview-setup-grid">
+        <section class="overview-focus-panel">
+          <div class="is-flex is-justify-content-space-between is-align-items-flex-end is-flex-wrap-wrap gap-2 mb-3">
+            <div>
+              <p class="heading">Question focus</p>
+              <h2 class="title is-5">Compact benchmark categories</h2>
+              <p class="section-hint mb-0">Pick the question type you want the next experiment to optimize.</p>
+            </div>
+            <span class="tag is-light">{{ question_type_options|length }} categories</span>
+          </div>
+
+          <div class="research-step-grid research-step-grid--compact">
+            {% for option in question_type_options %}
+              <label class="research-step-card research-step-card--compact {% if option.value == selected_question_focus %}is-selected{% elif loop.first and not selected_question_focus %}is-selected{% endif %}" data-starting-config='{{ option.starting_config | tojson }}' data-tooltip="{{ option.tooltip }}">
+                <input type="radio" name="question_focus" value="{{ option.value }}" {% if option.value == selected_question_focus %}checked{% elif loop.first and not selected_question_focus %}checked{% endif %}>
+                <span class="research-step-card__number">{{ loop.index }}</span>
+                <span class="research-step-card__title">{{ option.label }} <span class="help-tooltip" tabindex="0" aria-label="{{ option.tooltip }}" data-tooltip="{{ option.tooltip }}">?</span></span>
+                <span class="tag is-light">{{ option.count }} question{{ '' if option.count == 1 else 's' }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </section>
+
+        <aside class="overview-dataset-panel">
+          <div class="dataset-panel-header">
+            <div>
+              <p class="heading">Dataset</p>
+              <h2 class="title is-5">Run source</h2>
+            </div>
+            <button class="dataset-upload-action js-modal-trigger" type="button" data-target="dataset-upload-guide-modal">
+              <span aria-hidden="true">↑</span>
+              {{ 'Replace' if has_uploaded_dataset else 'Try yours' }}
+            </button>
+          </div>
+          <p class="section-hint">Use the hosted demo benchmark or upload a compact JSONL dataset.</p>
+
+          <div class="dataset-source-card {% if use_uploaded_dataset %}dataset-source-card--active{% endif %}">
+            <span class="dataset-source-card__pulse"></span>
+            <div>
+              <strong>{{ uploaded_dataset_label if use_uploaded_dataset else 'Hosted demo dataset' }}</strong>
+              <p>{{ 'Your uploaded dataset will be used for the next experiment.' if use_uploaded_dataset else 'Ready to run with the built-in EnterpriseRAG sample.' }}</p>
+            </div>
+          </div>
+
+          {% if has_uploaded_dataset %}
+            <label class="dataset-switch mt-3">
+              <input type="checkbox" name="use_uploaded_dataset" value="1" {% if use_uploaded_dataset %}checked{% endif %}>
+              <span></span>
+              <strong>Use uploaded dataset</strong>
+            </label>
+          {% endif %}
+
+          <div class="buttons mt-4 mb-0">
+            <button class="button is-light is-fullwidth" type="submit" name="action" value="save_focus">Save setup</button>
+            <a class="button is-link is-fullwidth" href="{{ url_for('experiments') }}">Go to Experiments</a>
+          </div>
+        </aside>
+      </div>
+    </form>
+    </div>
+
+    <section class="box overview-chat-section overview-chat-section--compact" id="ai-assistant">
+    <div class="overview-chat-section__hero overview-chat-section__hero--compact">
+      <div>
+        <p class="heading">AI copilot</p>
+        <h2 class="title is-5">Rapid RAG test</h2>
+        <p class="section-hint mb-0">Fire a quick question, see the latest answer, then tune the benchmark focus.</p>
+      </div>
+
+      <div class="chat-header-actions chat-header-actions--compact">
+        <span class="tag is-link is-light">{{ chat_messages|length }} messages</span>
+        <form method="post" action="{{ url_for('new_ai_chat') }}">
+          <button class="button is-small chat-header-button" type="submit">New</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="chat-prompt-chips chat-prompt-chips--compact" aria-label="Prompt ideas">
+      {% for prompt in sample_prompts[:3] %}
+        <form method="post" action="{{ url_for('ai_chat') }}">
+          <input type="hidden" name="question" value="{{ prompt }}">
+          <input type="hidden" name="strategy" value="{{ strategy }}">
+          <input type="hidden" name="top_k" value="{{ top_k }}">
+          <button class="chat-prompt-chip" type="submit">
+            <span>Try</span>
+            <strong>{{ prompt }}</strong>
+          </button>
+        </form>
+      {% endfor %}
+    </div>
+
+    <div class="chat-thread chat-thread--overview chat-thread--compact chat-thread--standard">
+      {% if chat_messages %}
+        {% for message in chat_messages[-6:] %}
+          <article class="chat-message chat-message--{{ 'user' if message.role == 'user' else 'assistant' }}">
+            <div class="chat-avatar">{{ 'You' if message.role == 'user' else 'AI' }}</div>
+            <div class="chat-bubble{% if message.metadata is defined and message.metadata.error is defined and message.metadata.error %} chat-bubble--error{% endif %}">
+              <p>{{ message.content }}</p>
+              {% if message.role == 'assistant' and message.metadata %}
+                <div class="chat-meta mt-2">
+                  {% if message.metadata.latency_ms is defined and message.metadata.latency_ms is not none %}<span>{{ "%.0f"|format(message.metadata.latency_ms) }} ms</span>{% endif %}
+                  {% if message.sources %}<span>{{ message.sources|length }} sources</span>{% endif %}
+                  {% if message.metadata.strategy is defined and message.metadata.strategy %}<span>{{ message.metadata.strategy }}</span>{% endif %}
+                </div>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      {% else %}
+        <article class="chat-message chat-message--assistant">
+          <div class="chat-avatar">AI</div>
+          <div class="chat-empty-state">
+            <p class="chat-empty-state__title">Ready for quick tests.</p>
+            <p class="chat-empty-state__copy">Use one prompt, inspect the answer, iterate fast.</p>
+          </div>
+        </article>
+      {% endif %}
+    </div>
+
+    <form class="chat-composer chat-composer--overview chat-composer--compact" method="post" action="{{ url_for('ai_chat') }}" id="chat-composer-form">
+      <label class="is-sr-only" for="question">Ask a RAG question</label>
+      <input class="input chat-question-input" id="question" name="question" type="text" placeholder="Paste a test question..." required>
+
+      <div class="chat-composer__footer">
+        <div class="chat-controls">
+          <label class="label-with-help" for="strategy">
+            <span class="is-size-7 has-text-grey">Mode</span>
+            <span class="help-tooltip" tabindex="0" aria-label="Retrieval strategy used for this test." data-tooltip="Dense search uses embeddings. Hybrid search combines dense search with BM25 keyword matching.">?</span>
+          </label>
+          <div class="select is-small">
+            <select id="strategy" name="strategy">
+              <option value="dense" {% if strategy == "dense" %}selected{% endif %}>Dense</option>
+              <option value="hybrid" {% if strategy == "hybrid" %}selected{% endif %}>Hybrid</option>
+            </select>
+          </div>
+
+          <label class="label-with-help" for="top_k">
+            <span class="is-size-7 has-text-grey">Top-k</span>
+            <span class="help-tooltip" tabindex="0" aria-label="Number of documents retrieved before answering." data-tooltip="Number of documents retrieved before answering. Increase it to inspect broader context, reduce it to test precision.">?</span>
+          </label>
+          <input class="input is-small chat-top-k" id="top_k" name="top_k" type="number" min="1" max="8" value="{{ top_k }}">
+        </div>
+
+        <button class="button is-link chat-send-button" type="submit">
+          <span class="chat-send-button__idle">Test</span>
+          <span class="chat-send-button__loading">Testing...</span>
+        </button>
+      </div>
+    </form>
+
+    <div class="retrieval-scatter-card retrieval-scatter-card--compact">
+      <div class="is-flex is-justify-content-space-between is-align-items-flex-start gap-2 mb-2">
+        <div>
+          <p class="has-text-weight-semibold mb-1">Retrieval distance</p>
+          <p class="field-hint mb-0">Lower points are closer matches for the current question.</p>
+        </div>
+        <span class="tag is-light">k={{ active_sources|length if active_sources else 0 }}</span>
+      </div>
+      {% if active_sources %}
+        <div class="chart-canvas-wrap chart-canvas-wrap--scatter chart-canvas-wrap--scatter-compact">
+          <canvas id="rag-distance-scatter" aria-label="Retrieved document distance scatter plot"></canvas>
+        </div>
+      {% else %}
+        <div class="scatter-empty-state">
+          <strong>No retrieval map yet</strong>
+          <span>Ask a question to plot the ranked sources.</span>
+        </div>
+      {% endif %}
+      </div>
+
+    <details class="chat-sources-drawer">
+      <summary>Retrieved sources <span>{{ active_sources|length if active_sources else 0 }}</span></summary>
+      {% if active_sources %}
+        <div class="source-stack source-stack--compact">
+          {% for doc in active_sources %}
+            <article class="source-card source-card--compact">
+              <div class="source-card__header">
+                <code>{{ doc.id }}</code>
+                <span>{{ "%.3f"|format(doc.score) if doc.score is defined and doc.score is not none else "—" }}</span>
+              </div>
+              <p class="is-size-7 has-text-grey mb-1">{{ doc.source_type }}</p>
+              <p>{{ doc.preview }}</p>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="is-size-7 has-text-grey mb-0">Sources appear after a test question.</p>
+      {% endif %}
+    </details>
+    </section>
+  </div>
+
+  <div class="modal config-modal dataset-upload-modal" id="dataset-upload-guide-modal" aria-hidden="true">
+    <div class="modal-background js-modal-close"></div>
+    <div class="modal-card config-modal-card dataset-guide-modal-card">
+      <header class="modal-card-head">
+        <div>
+          <p class="modal-card-title">Try with your dataset</p>
+          <p class="field-hint mb-0">Upload two JSONL files. Each file must stay under 5 MB for this demo.</p>
+        </div>
+        <button class="delete js-modal-close" type="button" aria-label="close"></button>
+      </header>
+      <section class="modal-card-body dataset-guide-modal-body">
+        <div class="dataset-modal-grid">
+          <article class="dataset-guide-block">
+            <p class="heading">Documents</p>
+            <h3 class="title is-6"><code>documents.jsonl</code></h3>
+            <p class="field-hint">Required: <code>document_id</code> or <code>id</code>, plus <code>body</code> or <code>content</code>.</p>
+            <pre class="code-panel dataset-mini-code">{"document_id":"policy_001","title":"Remote Work","source_type":"policy","body":"Employees may work remotely up to three days per week."}</pre>
+            <label class="label is-small mt-3" for="dataset_docs">Documents JSONL</label>
+            <input class="input is-small" id="dataset_docs" name="dataset_docs" type="file" accept=".jsonl,.json" data-max-size-bytes="5242880" form="research-setup-form">
+          </article>
+
+          <article class="dataset-guide-block">
+            <p class="heading">Questions</p>
+            <h3 class="title is-6"><code>questions.jsonl</code></h3>
+            <p class="field-hint">Required: <code>question_id</code>, <code>question</code>, <code>expected_doc_ids</code>.</p>
+            <pre class="code-panel dataset-mini-code">{"question_id":"q_001","question":"What does remote policy allow?","question_type":"lookup","expected_doc_ids":["policy_001"]}</pre>
+            <label class="label is-small mt-3" for="dataset_questions">Questions JSONL</label>
+            <input class="input is-small" id="dataset_questions" name="dataset_questions" type="file" accept=".jsonl,.json" data-max-size-bytes="5242880" form="research-setup-form">
+          </article>
+        </div>
+
+        <div class="dataset-modal-note">
+          <strong>Make IDs match.</strong>
+          <span>Every value in <code>expected_doc_ids</code> must exist as a document ID in the documents file. Optional helpful fields: <code>source_type</code>, <code>source_types</code>, <code>gold_answer</code>, <code>answer_facts</code>, <code>metadata</code>.</span>
+        </div>
+      </section>
+      <footer class="modal-card-foot dataset-modal-footer">
+        <button class="button is-link" type="submit" name="action" value="upload_dataset" form="research-setup-form">Upload and use dataset</button>
+        <button class="button is-light js-modal-close" type="button">Cancel</button>
+      </footer>
+    </div>
+  </div>
+
+  {% if research_setups %}
+    <div class="box page-block">
+      <p class="heading">History</p>
+      <h2 class="title is-5">Recent research setups</h2>
+      <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Questions</th>
+              <th>Dataset</th>
+              <th>Starting config</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for setup in research_setups %}
+              <tr>
+                <td>{{ setup.created_at_display }}</td>
+                <td>{{ setup.question_focus_label }}</td>
+                <td>{{ setup.dataset_label }}</td>
+                <td><code>{{ setup.starting_config.strategy }}</code> · top_k={{ setup.starting_config.top_k }}{% if setup.starting_config.use_reranker %} · reranker{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if error and not show_running_animation %}
+    <div class="notification is-danger is-light mt-4">Failed to load status: {{ error }}</div>
+  {% elif not status and not show_running_animation %}
+    <div class="notification is-info is-light mt-4">No active experiment run in this session yet. Start an experiment to populate status.</div>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      var cards = document.querySelectorAll('.research-step-card');
+
+      cards.forEach(function (card) {
+        var input = card.querySelector('input[type="radio"]');
+        if (!input) return;
+        input.addEventListener('change', function () {
+          cards.forEach(function (c) { c.classList.remove('is-selected'); });
+          card.classList.add('is-selected');
+        });
+      });
+
+      [document.getElementById('dataset_docs'), document.getElementById('dataset_questions')].forEach(function (input) {
+        if (!input) return;
+        input.addEventListener('change', function () {
+          var maxSize = Number(input.dataset.maxSizeBytes || 0);
+          var file = input.files && input.files[0];
+          if (!file || !maxSize) return;
+          if (file.size > maxSize) {
+            var maxMb = Math.round(maxSize / (1024 * 1024));
+            input.value = '';
+            window.alert('For the demo, ' + input.name.replace('dataset_', '').replace('_', ' ') + ' files must be ' + maxMb + ' MB or smaller.');
+          }
+        });
+      });
+
+      var form = document.getElementById('chat-composer-form');
+      if (form) {
+        form.addEventListener('submit', function () {
+          var button = form.querySelector('.chat-send-button');
+          if (button) {
+            button.classList.add('is-loading-chat');
+            button.disabled = true;
+          }
+        });
+      }
+
+      var scatterCanvas = document.getElementById('rag-distance-scatter');
+      var sources = {{ active_sources | tojson }};
+      if (scatterCanvas && typeof Chart !== 'undefined' && Array.isArray(sources) && sources.length) {
+        var points = sources.map(function (source, index) {
+          var score = typeof source.score === 'number' ? source.score : Number(source.score || 0);
+          return {
+            x: index + 1,
+            y: Math.max(0, 1 - score),
+            score: score,
+            id: source.id,
+            sourceType: source.source_type || 'unknown'
+          };
+        });
+
+        new Chart(scatterCanvas, {
+          type: 'scatter',
+          data: {
+            datasets: [
+              {
+                label: 'Retrieved document distance',
+                data: points,
+                parsing: false,
+                pointRadius: points.map(function (point) { return Math.max(5, Math.min(13, point.score * 14)); }),
+                pointHoverRadius: 14,
+                pointBackgroundColor: points.map(function (point, index) {
+                  return index === 0 ? 'rgba(34, 197, 94, 0.92)' : 'rgba(220, 36, 76, 0.82)';
+                }),
+                pointBorderColor: 'rgba(255, 255, 255, 0.72)',
+                pointBorderWidth: 1
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false
+              },
+              tooltip: {
+                callbacks: {
+                  title: function (items) {
+                    return items[0].raw.id;
+                  },
+                  label: function (context) {
+                    var point = context.raw;
+                    return [
+                      'Rank: ' + point.x,
+                      'Distance: ' + point.y.toFixed(3),
+                      'Similarity: ' + point.score.toFixed(3),
+                      'Source: ' + point.sourceType
+                    ];
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                min: 0.5,
+                max: sources.length + 0.5,
+                ticks: {
+                  stepSize: 1
+                },
+                title: {
+                  display: true,
+                  text: 'Retrieved rank'
+                },
+                grid: {
+                  display: false
+                }
+              },
+              y: {
+                beginAtZero: true,
+                suggestedMax: 1,
+                title: {
+                  display: true,
+                  text: 'Approx. distance (1 - score)'
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+  </script>
+{% endblock %}

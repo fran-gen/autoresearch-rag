@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block body %}
+  <div class="marketing-shell">
+    <nav class="navbar" role="navigation" aria-label="marketing navigation">
+      <div class="container">
+        <div class="navbar-brand">
+          <a class="navbar-item" href="{{ url_for('index') }}" aria-label="Dashboard home">
+            <span class="brand-badge" aria-hidden="true">M</span>
+            <span class="has-text-weight-semibold">Monotonic Labs</span>
+          </a>
+
+          <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="marketing-navbar-menu">
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+          </a>
+        </div>
+
+        <div id="marketing-navbar-menu" class="navbar-menu">
+          <div class="navbar-end">
+            <div class="navbar-item">
+              <div class="buttons">
+                <a class="button is-light" href="{{ url_for('login') }}">Sign in</a>
+                <a class="button is-link" href="{{ url_for('register') }}">Register</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <section class="hero marketing-hero auth-hero">
+      <div class="hero-body">
+        <div class="container">
+          <div class="auth-ambient auth-ambient--one"></div>
+          <div class="auth-ambient auth-ambient--two"></div>
+
+          <div class="columns is-variable is-6 is-vcentered">
+            <div class="column is-6-desktop">
+              <div class="auth-copy">
+                <p class="heading">Monotonic Labs Research OS</p>
+                <h1 class="title is-2 is-1-desktop">Tune retrieval systems without flying blind.</h1>
+                <p class="subtitle is-5 has-text-grey">Sign in to monitor live experiments, compare score movement, and turn weak answers into the next optimization step.</p>
+
+                <div class="buttons mt-5">
+                  <a class="button is-link is-medium" href="{{ url_for('login') }}">Sign in</a>
+                  <a class="button is-light is-medium" href="{{ url_for('register') }}">Create account</a>
+                </div>
+
+                <div class="auth-proof-grid mt-6">
+                  <div class="auth-proof-card">
+                    <span class="auth-proof-card__value">+18.7%</span>
+                    <span class="auth-proof-card__label">best lift</span>
+                  </div>
+                  <div class="auth-proof-card">
+                    <span class="auth-proof-card__value">42</span>
+                    <span class="auth-proof-card__label">runs tracked</span>
+                  </div>
+                  <div class="auth-proof-card">
+                    <span class="auth-proof-card__value">91%</span>
+                    <span class="auth-proof-card__label">questions covered</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="column is-5-desktop is-offset-1-desktop">
+              <div class="auth-preview-card" aria-label="Dashboard preview">
+                <div class="auth-preview-card__topbar">
+                  <div>
+                    <p class="heading mb-1">Live dashboard preview</p>
+                    <p class="has-text-weight-semibold">Experiment score progression</p>
+                  </div>
+                  <span class="tag is-success is-light">Running</span>
+                </div>
+
+                <div class="auth-chart" aria-hidden="true">
+                  <div class="auth-chart__grid"></div>
+                  <div class="auth-chart__bar" style="--bar-height: 36%; --bar-delay: 0s;"><span>0.42</span></div>
+                  <div class="auth-chart__bar auth-chart__bar--accepted" style="--bar-height: 54%; --bar-delay: .08s;"><span>0.51</span></div>
+                  <div class="auth-chart__bar" style="--bar-height: 48%; --bar-delay: .16s;"><span>0.48</span></div>
+                  <div class="auth-chart__bar auth-chart__bar--accepted" style="--bar-height: 72%; --bar-delay: .24s;"><span>0.63</span></div>
+                  <div class="auth-chart__bar auth-chart__bar--accepted" style="--bar-height: 86%; --bar-delay: .32s;"><span>0.71</span></div>
+                  <div class="auth-chart__baseline"></div>
+                </div>
+
+                <div class="auth-preview-metrics">
+                  <div>
+                    <p class="heading">Best score</p>
+                    <p class="title is-5">0.7134</p>
+                  </div>
+                  <div>
+                    <p class="heading">Accepted</p>
+                    <p class="title is-5">3</p>
+                  </div>
+                  <div>
+                    <p class="heading">Delta</p>
+                    <p class="title is-5 has-text-success">+0.18</p>
+                  </div>
+                </div>
+
+                <div class="auth-feature-strip">
+                  <span>Live status</span>
+                  <span>Leaderboards</span>
+                  <span>Failure analysis</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer py-5">
+      <div class="content has-text-centered is-size-7 has-text-grey">
+        <p>© {{ current_year }} Monotonic Labs</p>
+      </div>
+    </footer>
+  </div>
+{% endblock %}

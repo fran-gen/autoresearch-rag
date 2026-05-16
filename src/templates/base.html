@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Monotonic Labs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#13151a">
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/globals.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% block body %}{% endblock %}
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <script>
+    if (typeof Chart !== 'undefined') {
+      Chart.defaults.color = '#9ca3af';
+      Chart.defaults.borderColor = 'rgba(255, 255, 255, .08)';
+      Chart.defaults.plugins.tooltip.backgroundColor = '#1c1f27';
+      Chart.defaults.plugins.tooltip.borderColor = '#2d3040';
+      Chart.defaults.plugins.tooltip.borderWidth = 1;
+      Chart.defaults.plugins.tooltip.titleColor = '#e5e7eb';
+      Chart.defaults.plugins.tooltip.bodyColor = '#e5e7eb';
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('.navbar-burger').forEach(function (burger) {
+        burger.addEventListener('click', function () {
+          const target = document.getElementById(burger.dataset.target);
+          burger.classList.toggle('is-active');
+          if (target) {
+            target.classList.toggle('is-active');
+          }
+        });
+      });
+
+      document.querySelectorAll('[data-api-key-dropdown]').forEach(function (dropdown) {
+        const trigger = dropdown.querySelector('.api-key-trigger');
+        if (!trigger) {
+          return;
+        }
+
+        trigger.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          const isActive = dropdown.classList.toggle('is-active');
+          trigger.setAttribute('aria-expanded', String(isActive));
+        });
+
+        dropdown.addEventListener('click', function (event) {
+          event.stopPropagation();
+        });
+      });
+
+      document.addEventListener('click', function () {
+        document.querySelectorAll('[data-api-key-dropdown].is-active').forEach(function (dropdown) {
+          dropdown.classList.remove('is-active');
+          const trigger = dropdown.querySelector('.api-key-trigger');
+          if (trigger) {
+            trigger.setAttribute('aria-expanded', 'false');
+          }
+        });
+      });
+
+      const closeModal = function (modal) {
+        modal.classList.remove('is-active');
+        modal.setAttribute('aria-hidden', 'true');
+      };
+
+      document.querySelectorAll('.js-modal-trigger').forEach(function (trigger) {
+        trigger.addEventListener('click', function () {
+          const modal = document.getElementById(trigger.dataset.target);
+          if (!modal) {
+            return;
+          }
+          modal.classList.add('is-active');
+          modal.setAttribute('aria-hidden', 'false');
+        });
+      });
+
+      document.querySelectorAll('.modal .js-modal-close').forEach(function (close) {
+        close.addEventListener('click', function () {
+          const modal = close.closest('.modal');
+          if (modal) {
+            closeModal(modal);
+          }
+        });
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
+          return;
+        }
+        document.querySelectorAll('.modal.is-active').forEach(closeModal);
+      });
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
