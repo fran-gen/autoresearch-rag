@@ -163,22 +163,8 @@ def is_absolute_url(value: str) -> bool:
     return bool(parsed.scheme and parsed.netloc)
 
 
-def normalize_api_proxy_prefix(value: str) -> str:
-    if not value:
-        return "/api"
-
-    if is_absolute_url(value):
-        path = urlparse(value).path.rstrip("/")
-        return path or "/api"
-
-    normalized = value.strip()
-    if not normalized.startswith("/"):
-        normalized = f"/{normalized}"
-
-    return normalized.rstrip("/") or "/api"
-
-
-API_PROXY_PREFIX = normalize_api_proxy_prefix(API_BASE)
+API_ROUTE_PREFIX = "/api"
+API_PROXY_PREFIX = "/api"
 API_UPSTREAM = (
     os.getenv("API_UPSTREAM")
     or os.getenv("INTERNAL_API_BASE")
@@ -195,6 +181,7 @@ def log_dashboard_startup() -> None:
     logger.info("Dashboard startup project root: %s", BASE_DIR)
     logger.info("Dashboard startup API_BASE: %s", API_BASE)
     logger.info("Dashboard startup API_UPSTREAM: %s", API_UPSTREAM)
+    logger.info("Dashboard startup API_ROUTE_PREFIX: %s", API_ROUTE_PREFIX or "/")
     logger.info("Dashboard startup BENCHMARK_ROOT env: %s", os.environ.get("BENCHMARK_ROOT", "<unset>"))
     logger.info("Dashboard startup benchmark root: %s", settings.benchmark_root.resolve())
     logger.info("Dashboard startup documents dir: %s", loader.documents_dir.resolve())
@@ -205,7 +192,7 @@ def log_dashboard_startup() -> None:
     logger.info("Dashboard startup qdrant url: %s", settings.qdrant_url or "<unset>")
     logger.info("Dashboard startup qdrant path fallback: %s", settings.qdrant_path.resolve())
     logger.info("Dashboard startup host repo is expected to be mounted at /app by docker-compose.yml")
-    logger.info("Dashboard data status page source: API GET /dataset/status")
+    logger.info("Dashboard data status page source: API GET /api/dataset/status")
     logger.info("Dashboard host download command, full dataset: python scripts/download_dataset.py full")
     logger.info("Dashboard host download command, half dataset: python scripts/download_dataset.py half")
     logger.info("Dashboard in-container index command: docker compose exec api python scripts/embed_dataset.py")
@@ -466,11 +453,13 @@ def normalize_bool(value, default: bool = False) -> bool:
 
 
 def get_dashboard_api_base() -> str:
-    return API_UPSTREAM
+    if API_UPSTREAM.endswith(API_ROUTE_PREFIX):
+        return API_UPSTREAM
+    return f"{API_UPSTREAM}{API_ROUTE_PREFIX}"
 
 
 def build_api_proxy_target(path: str = "") -> str:
-    target = API_UPSTREAM
+    target = get_dashboard_api_base()
     if path:
         target = f"{target}/{path.lstrip('/')}"
 
@@ -498,15 +487,20 @@ def build_api_proxy_headers() -> dict[str, str]:
 
 def rewrite_proxy_response_headers(response_headers: requests.structures.CaseInsensitiveDict) -> list[tuple[str, str]]:
     rewritten_headers = []
-    upstream_origin = urlparse(API_UPSTREAM)
+    upstream_base = get_dashboard_api_base().rstrip("/")
+    upstream_origin = urlparse(upstream_base)
+    upstream_origin_url = f"{upstream_origin.scheme}://{upstream_origin.netloc}"
     public_origin = request.host_url.rstrip("/")
 
     for name, value in response_headers.items():
         if name.lower() in HOP_BY_HOP_HEADERS:
             continue
 
-        if name.lower() == "location" and value.startswith(f"{upstream_origin.scheme}://{upstream_origin.netloc}"):
-            suffix = value[len(f"{upstream_origin.scheme}://{upstream_origin.netloc}"):]
+        if name.lower() == "location" and value.startswith(upstream_origin_url):
+            if value.startswith(upstream_base):
+                suffix = value[len(upstream_base):]
+            else:
+                suffix = value[len(upstream_origin_url):]
             value = f"{public_origin}{API_PROXY_PREFIX}{suffix}"
 
         rewritten_headers.append((name, value))

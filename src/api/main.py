@@ -34,7 +34,7 @@ def log_startup_paths() -> None:
     logger.info("API startup qdrant url: %s", settings.qdrant_url or "<unset>")
     logger.info("API startup qdrant path fallback: %s", settings.qdrant_path.resolve())
     logger.info("API startup host repo is expected to be mounted at /app by docker-compose.yml")
-    logger.info("API data status endpoint: GET /dataset/status")
+    logger.info("API data status endpoint: GET /api/dataset/status")
     logger.info("API no-data behavior: service stays up and returns 'No data available' until data/index are ready")
     logger.info("API host download command, full dataset: python scripts/download_dataset.py full")
     logger.info("API host download command, half dataset: python scripts/download_dataset.py half")
@@ -66,4 +66,4 @@ async def up():
     return {"status": "ok"}
 
 
-app.include_router(router)
+app.include_router(router, prefix="/api")
