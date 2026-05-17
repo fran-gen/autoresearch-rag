@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage
 
 from src.agents.history import format_best_config_json, format_experiment_history, format_rejected_experiments_summary
 from src.agents.state import ResearchLabState
+from src.agents.text_utils import extract_text_content
 from src.config import get_google_api_key, get_settings
 from src.models import ExperimentSpec, RetrievalConfig
 
@@ -214,7 +215,7 @@ async def planner_agent(state: ResearchLabState) -> ResearchLabState:
                     temperature=0.3,
                 )
                 response = await llm.ainvoke([HumanMessage(content=prompt)])
-                parsed = _parse_config_from_llm(str(response.content), base_config)
+                parsed = _parse_config_from_llm(extract_text_content(response.content), base_config)
                 if parsed is not None:
                     candidate_config, rationale = parsed
                     candidate_config.embedding_model = settings.embedding_model

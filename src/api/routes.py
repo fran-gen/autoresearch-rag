@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.agents.graph import build_research_graph, default_state
+from src.agents.text_utils import extract_text_content
 from src.benchmark.loader import EnterpriseRagBenchLoader
 from src.benchmark.metrics import composite_score
 from src.config import get_google_api_key, get_settings, set_runtime_google_api_key
@@ -39,6 +40,7 @@ _dataset_readiness_cache: dict[str, Any] = {
     "indexed_count": 0,
     "qdrant_ready": False,
 }
+MAX_RESEARCH_ITERATIONS = 10
 
 
 async def _apply_runtime_api_key_from_header(
@@ -233,6 +235,11 @@ async def _run_research_loop(run_id: str) -> None:
             await _persist_state(run_runtime.state)
 
         run_runtime.last_error = None
+    except asyncio.CancelledError:
+        run_runtime.last_error = None
+        run_runtime.state["should_stop"] = True
+        run_runtime.state["current_phase"] = "stopped"
+        run_runtime.state["latest_summary"] = "Research run stopped by user."
     except Exception as exc:
         run_runtime.last_error = str(exc)
         run_runtime.state["current_phase"] = "failed"
@@ -306,29 +313,31 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
             initial_cfg = first_exp.get("retrieval_config")
     if initial_cfg is None and baseline_cfg:
         initial_cfg = baseline_cfg.model_dump() if hasattr(baseline_cfg, "model_dump") else baseline_cfg
+    score_history = _normalize_history_text(run_runtime.state.get("score_history"))
+    code_history = _normalize_history_text(run_runtime.state.get("code_history"))
     return {
         "run_id": run_runtime.state.get("run_id"),
         "running": run_runtime.running,
         "phase": run_runtime.state.get("current_phase"),
         "iteration": run_runtime.state.get("iteration"),
         "max_iterations": run_runtime.state.get("max_iterations"),
-        "latest_summary": run_runtime.state.get("latest_summary"),
+        "latest_summary": extract_text_content(run_runtime.state.get("latest_summary")),
         "best_score": best_score,
         "initial_baseline_score": initial_baseline_score,
         "accepted_experiments": run_runtime.state.get("accepted_experiments"),
         "rejected_experiments": run_runtime.state.get("rejected_experiments"),
         "per_type_summary": run_runtime.state.get("per_type_summary"),
-        "planner_rationale": run_runtime.state.get("planner_rationale"),
+        "planner_rationale": extract_text_content(run_runtime.state.get("planner_rationale")),
         "candidate_config": candidate.model_dump() if candidate else None,
         "baseline_config": initial_cfg,
-        "final_report": run_runtime.state.get("final_report"),
-        "score_history": run_runtime.state.get("score_history"),
+        "final_report": extract_text_content(run_runtime.state.get("final_report")),
+        "score_history": score_history,
         "failure_examples": run_runtime.state.get("failure_examples", []),
         "question_focus": run_runtime.state.get("question_focus"),
         "research_setup_id": run_runtime.state.get("research_setup_id"),
         "failure_taxonomy": run_runtime.state.get("failure_taxonomy"),
-        "recommendation": run_runtime.state.get("recommendation"),
-        "validation_summary": run_runtime.state.get("validation_summary"),
+        "recommendation": extract_text_content(run_runtime.state.get("recommendation")),
+        "validation_summary": extract_text_content(run_runtime.state.get("validation_summary")),
         "dataset_readiness": _dataset_readiness(),
         "tried_config_count": len(run_runtime.state.get("tried_config_fingerprints", []) or []),
         "rejected_config_count": len(run_runtime.state.get("rejected_config_fingerprints", []) or []),
@@ -339,8 +348,23 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "initial_pipeline_code": run_runtime.state.get("initial_pipeline_code", ""),
         "current_pipeline_code": run_runtime.state.get("current_pipeline_code", ""),
         "proposed_code": run_runtime.state.get("proposed_code", ""),
-        "code_history": run_runtime.state.get("code_history", []),
+        "code_history": code_history,
     }
+
+
+def _normalize_history_text(history: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not isinstance(history, list):
+        return rows
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        for key in ("hypothesis", "rationale", "reason", "diff_summary"):
+            if key in normalized:
+                normalized[key] = extract_text_content(normalized.get(key))
+        rows.append(normalized)
+    return rows
 
 
 @router.post("/research/start")
@@ -357,6 +381,7 @@ async def start_research(
         raise HTTPException(status_code=500, detail="Experiment store is not configured.")
     if research_mode not in ("config", "karpathy"):
         raise HTTPException(status_code=400, detail="research_mode must be 'config' or 'karpathy'.")
+    max_iterations = max(1, min(MAX_RESEARCH_ITERATIONS, int(max_iterations)))
 
     starting_config = None
     if starting_config_json:
@@ -387,6 +412,24 @@ async def start_research(
         "max_iterations": max_iterations,
         "research_mode": research_mode,
     }
+
+
+@router.post("/research/stop")
+async def stop_research(run_id: str | None = None):
+    run_runtime = _select_runtime(run_id)
+    if not run_runtime.state:
+        raise HTTPException(status_code=404, detail="Research run not found.")
+
+    run_runtime.state["should_stop"] = True
+    run_runtime.state["current_phase"] = "stopped"
+    run_runtime.state["latest_summary"] = "Research run stopped by user."
+    run_runtime.last_error = None
+
+    if run_runtime.task and not run_runtime.task.done():
+        run_runtime.task.cancel()
+    run_runtime.running = False
+
+    return {"status": "stopped", "run_id": run_runtime.state.get("run_id")}
 
 
 @router.get("/research/status")

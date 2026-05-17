@@ -24,9 +24,11 @@
     </div>
     <div class="level-right">
       <div class="tags are-medium">
-        <span class="tag {% if status and status.running %}is-success{% elif status and status.final_report %}is-link{% else %}is-light{% endif %}">
-          {% if status and status.running %}Running{% elif status and status.final_report %}Complete{% else %}Idle{% endif %}
-        </span>
+        {% if status and status.running %}
+          <span class="tag is-success">Running</span>
+        {% elif status and status.final_report %}
+          <span class="tag is-link">Complete</span>
+        {% endif %}
         {% if show_running_animation %}
           <span class="tag is-info is-light">Updating status</span>
         {% endif %}
@@ -138,16 +140,22 @@
               <span class="is-size-7 has-text-grey">Max iterations</span>
               <span class="tag is-light" id="max_iterations_value">{{ selected_max_iterations }}</span>
             </div>
-            <input class="slider is-fullwidth" type="range" id="max_iterations" name="max_iterations" min="1" max="100" value="{{ selected_max_iterations }}" oninput="onIterationsChange(this.value)" onchange="persistResearchControls()">
+            <input class="slider is-fullwidth" type="range" id="max_iterations" name="max_iterations" min="1" max="10" value="{{ selected_max_iterations }}" oninput="onIterationsChange(this.value)" onchange="persistResearchControls()">
 
             <input type="hidden" name="refresh" value="{{ refresh_every }}">
             <input type="hidden" name="live" value="{{ 1 if live_mode else 0 }}">
             <input type="hidden" name="question_focus" value="{{ selected_question_focus or 'all' }}">
             <input type="hidden" name="dataset_source" value="{{ 'upload' if use_uploaded_dataset else 'built_in' }}">
 
-            <button class="button is-link is-medium is-fullwidth mt-5" type="submit" {% if status and status.running %}disabled{% endif %}>
-              <span id="start-button-mode">Start experiment</span>
-            </button>
+            {% if status and status.running %}
+              <button class="button is-danger is-light is-medium is-fullwidth mt-5" type="submit" formaction="{{ url_for('stop_research') }}" formmethod="post">
+                Stop experiment
+              </button>
+            {% else %}
+              <button class="button is-link is-medium is-fullwidth mt-5" type="submit">
+                <span id="start-button-mode">Start experiment</span>
+              </button>
+            {% endif %}
           </div>
 
           <div class="research-dataset-card launch-focus-card">
@@ -167,7 +175,7 @@
       {% set progress = (iteration / max_iterations * 100) | int %}
       <div class="mt-5">
         <div class="is-flex is-justify-content-space-between is-size-7 has-text-grey mb-2">
-          <span>Phase: {{ status.phase if status.phase else 'idle' }}</span>
+          <span>Phase: {{ status.phase if status.phase else 'waiting' }}</span>
           <span>{{ iteration }}/{{ max_iterations }}</span>
         </div>
         <progress class="progress is-link" value="{{ progress }}" max="100">{{ progress }}%</progress>
@@ -179,6 +187,38 @@
     <div class="notification is-danger is-light mt-4">Failed to load status: {{ error }}</div>
   {% elif not status and not show_running_animation %}
     <div class="notification is-info is-light mt-4">No active experiment run in this session yet. Start an experiment above to populate status.</div>
+  {% endif %}
+
+  {% if status and status.running %}
+    <div class="box page-block live-insight-panel">
+      <div class="live-insight-panel__header">
+        <div>
+          <p class="heading">Live planning</p>
+          <h2 class="title is-5 mb-1">Planner reasoning and next action</h2>
+        </div>
+        <span class="tag is-success is-light">Iteration {{ status.iteration or 0 }}/{{ status.max_iterations or 10 }}</span>
+      </div>
+      <div class="live-insight-grid">
+        <article class="live-insight-card live-insight-card--primary">
+          <p class="heading">Planner reasoning</p>
+          <p>{{ status.planner_rationale or "Waiting for the planner to propose the next test." }}</p>
+        </article>
+        <article class="live-insight-card live-insight-card--recommendation">
+          <p class="heading">Recommended next action</p>
+          <p>{{ recommendation or "The recommendation will update after the first evaluated iteration." }}</p>
+        </article>
+        {% if candidate_config_items %}
+          <article class="live-insight-card live-insight-card--config">
+            <p class="heading">Config being tested</p>
+            <div class="pill-list">
+              {% for item in candidate_config_items[:8] %}
+                <span class="tag is-light config-pill{% if item.changed %} config-pill--changed{% endif %}">{{ item.key }}={{ item.value }}</span>
+              {% endfor %}
+            </div>
+          </article>
+        {% endif %}
+      </div>
+    </div>
   {% endif %}
 
   {# ── Section 2: Score signal cards (hidden until real data arrives) #}
@@ -269,6 +309,7 @@
   </div>
 
   {# ── Section 4: Current status ──────────────────────────────────── #}
+  {% if status and (status.running or status.final_report or status.latest_summary or status.planner_rationale or status.last_error) %}
   <div class="box page-block experiment-status-card">
     <div class="experiment-status-header">
       <div>
@@ -276,9 +317,11 @@
         <h2 class="title is-5 mb-1">Current status</h2>
         <p class="section-hint mb-0">Latest loop output and planner reasoning, expanded across the page so long updates are readable.</p>
       </div>
-      <span class="tag {% if status and status.running %}is-success{% elif status and status.final_report %}is-link{% else %}is-light{% endif %}">
-        {% if status and status.running %}Running{% elif status and status.final_report %}Complete{% else %}Idle{% endif %}
-      </span>
+      {% if status and status.running %}
+        <span class="tag is-success">Running</span>
+      {% elif status and status.final_report %}
+        <span class="tag is-link">Complete</span>
+      {% endif %}
     </div>
 
     <div class="experiment-status-grid {% if not (status and status.planner_rationale) %}experiment-status-grid--single{% endif %}">
@@ -298,6 +341,7 @@
       {% endif %}
     </div>
   </div>
+  {% endif %}
 
   {# ── Section 5: Research journey ───────────────────────────────── #}
   <div class="box page-block experiment-timeline-card">
@@ -347,13 +391,20 @@
           {% for entry in code_history %}
             <div class="journey-entry journey-entry--karpathy journey-entry--{{ 'accepted' if entry.accepted else 'rejected' }}">
               <div class="journey-entry__header">
-                <strong>{{ '✅' if entry.accepted else '❌' }} Iteration {{ entry.iteration }}</strong>
+                <strong>{{ '✓' if entry.accepted else '×' }} Iteration {{ entry.iteration }}</strong>
                 {% if entry.score is not none %}
                   <span>{{ "%.4f"|format(entry.score) }}</span>
                 {% endif %}
               </div>
               {% if entry.hypothesis %}
                 <p class="mb-2"><strong>Hypothesis:</strong> {{ entry.hypothesis }}</p>
+              {% endif %}
+              {% if entry.config_items %}
+                <div class="pill-list mb-3">
+                  {% for item in entry.config_items %}
+                    <span class="tag is-light config-pill{% if item.changed %} config-pill--changed{% endif %}">{{ item.key }}={{ item.value }}</span>
+                  {% endfor %}
+                </div>
               {% endif %}
               {% if entry.diff_summary %}
                 <details class="diff-details">
@@ -409,7 +460,7 @@
         {% if status and status.final_report %}
           <div class="report-card mt-4">
             <p class="has-text-weight-semibold mb-2">Research report</p>
-            <p>{{ status.final_report }}</p>
+            <div class="markdown-report">{{ final_report_html }}</div>
           </div>
         {% endif %}
   </div>
@@ -553,14 +604,14 @@
                     <tr>
                       <td>{{ row.name }}</td>
                       <td>
-                        <div class="metric-progress">
-                          <progress class="progress is-info is-small mb-2" value="{{ row.recall * 100 }}" max="100">{{ row.recall * 100 }}</progress>
+                        <div class="metric-progress metric-progress--recall">
+                          <progress class="progress is-small mb-2" value="{{ row.recall * 100 }}" max="100">{{ row.recall * 100 }}</progress>
                           <span class="metric-progress__value">{{ "%.3f"|format(row.recall) }}</span>
                         </div>
                       </td>
                       <td>
-                        <div class="metric-progress">
-                          <progress class="progress is-success is-small mb-2" value="{{ row.precision * 100 }}" max="100">{{ row.precision * 100 }}</progress>
+                        <div class="metric-progress metric-progress--precision">
+                          <progress class="progress is-small mb-2" value="{{ row.precision * 100 }}" max="100">{{ row.precision * 100 }}</progress>
                           <span class="metric-progress__value">{{ "%.3f"|format(row.precision) }}</span>
                         </div>
                       </td>
@@ -637,7 +688,7 @@
         var savedIter = localStorage.getItem('lab_max_iterations');
         if (savedIter) {
           var n = parseInt(savedIter, 10);
-          if (n >= 1 && n <= 100) {
+          if (n >= 1 && n <= 10) {
             document.getElementById('max_iterations').value = n;
             document.getElementById('max_iterations_value').textContent = n;
           }
@@ -752,15 +803,15 @@
               {
                 label: 'Recall',
                 data: rows.map(function (r) { return r.recall; }),
-                backgroundColor: 'rgba(220, 36, 76, 0.82)',
-                borderColor: 'rgba(220, 36, 76, 1)',
+                backgroundColor: 'rgba(56, 189, 248, 0.82)',
+                borderColor: 'rgba(56, 189, 248, 1)',
                 borderWidth: 1, borderRadius: 8,
               },
               {
                 label: 'Precision',
                 data: rows.map(function (r) { return r.precision; }),
-                backgroundColor: 'rgba(34, 197, 94, 0.82)',
-                borderColor: 'rgba(34, 197, 94, 1)',
+                backgroundColor: 'rgba(245, 158, 11, 0.82)',
+                borderColor: 'rgba(245, 158, 11, 1)',
                 borderWidth: 1, borderRadius: 8,
               },
             ],
