@@ -1,0 +1,85 @@
+{% extends "logged_in.html" %}
+
+{% block sidebar %}
+  <div class="notification is-light sidebar-panel">
+    <p class="has-text-weight-semibold mb-2">Launch guidance</p>
+    <p class="is-size-7">Use a small iteration budget for smoke tests, then increase it once the pipeline behaves as expected.</p>
+  </div>
+{% endblock %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Experiments</p>
+        <h1 class="title is-3 mb-2">New experiment</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Adjust the run settings, choose refresh behavior, and launch a new experiment.</p>
+      </div>
+    </div>
+    <div class="level-right">
+      <a class="button is-light" href="{{ url_for('experiments') }}">Back to experiments</a>
+    </div>
+  </section>
+
+  <div class="columns is-variable is-5">
+    <div class="column is-8-desktop">
+      <div class="box">
+        <p class="heading">Run configuration</p>
+        <h2 class="title is-5">Experiment controls</h2>
+        <p class="section-hint">These settings control how long the research loop runs and how quickly the UI updates while it works.</p>
+
+        <form method="post" action="{{ url_for('start_research') }}">
+          <div class="field">
+            <label class="label is-small label-with-help" for="max_iterations">
+              Max iterations
+              <span class="help-tooltip" tabindex="0" aria-label="Maximum optimization attempts for this run." data-tooltip="Maximum optimization attempts for this run. Higher values explore more ideas but take longer.">?</span>
+            </label>
+            <div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
+              <span class="is-size-7 has-text-grey">Iteration budget</span>
+              <span class="tag is-light" id="max_iterations_value">{{ max_iterations }}</span>
+            </div>
+            <input class="slider is-fullwidth" type="range" id="max_iterations" name="max_iterations" min="1" max="10" value="{{ max_iterations }}" oninput="document.getElementById('max_iterations_value').textContent = this.value">
+          </div>
+
+          <div class="field mt-5">
+            <label class="label is-small label-with-help" for="refresh">
+              Auto refresh
+              <span class="help-tooltip" tabindex="0" aria-label="Seconds between page refreshes in live mode." data-tooltip="Seconds between page refreshes in live mode. Lower values update faster but can feel noisy.">?</span>
+            </label>
+            <div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
+              <span class="is-size-7 has-text-grey">Refresh interval</span>
+              <span class="tag is-light" id="refresh_value">{{ refresh_every }}</span>
+            </div>
+            <input class="slider is-fullwidth" type="range" id="refresh" name="refresh" min="3" max="30" value="{{ refresh_every }}" oninput="document.getElementById('refresh_value').textContent = this.value">
+          </div>
+
+          <div class="field mt-5">
+            <label class="checkbox">
+              <input type="checkbox" id="live" name="live" value="1" {% if live_mode %}checked{% endif %}>
+              Enable live refresh after start
+              <span class="help-tooltip" tabindex="0" aria-label="Keeps the overview updating after launch." data-tooltip="Keeps the overview updating after launch so you can monitor progress without manually refreshing.">?</span>
+            </label>
+          </div>
+
+          <div class="buttons mt-5">
+            <button class="button is-link" type="submit">Start experiment</button>
+            <a class="button is-light" href="{{ url_for('experiments') }}">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="column">
+      <div class="box">
+        <p class="heading">Defaults</p>
+        <h2 class="title is-5">Suggested setup</h2>
+
+        <div class="content is-small has-text-grey">
+          <p><strong>Iterations:</strong> Start with <code>3</code> to validate the pipeline quickly.</p>
+          <p><strong>Refresh:</strong> <code>5s</code> usually gives a good balance between feedback and noise.</p>
+          <p><strong>Live mode:</strong> Keep it enabled if you want the overview to keep updating while the run progresses.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

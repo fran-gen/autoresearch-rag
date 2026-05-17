@@ -1,0 +1,68 @@
+{% extends "logged_in.html" %}
+
+{% block sidebar %}
+  <div class="notification is-light sidebar-panel">
+    <p class="has-text-weight-semibold mb-2">How to use hypotheses</p>
+    <p class="is-size-7">Look for ideas with clear rationale and high expected impact, then compare the experiments they produce.</p>
+  </div>
+{% endblock %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Hypotheses</p>
+        <h1 class="title is-3 mb-2">Research hypotheses log</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Browse generated ideas and inspect why they were proposed.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="box hypothesis-log-card">
+    <div class="level is-mobile mb-4">
+      <div class="level-left">
+        <div>
+          <p class="heading">Idea log</p>
+          <h2 class="title is-5">All tracked hypotheses</h2>
+          <p class="section-hint">Each row explains the proposed change and why the planner expected it to help.</p>
+        </div>
+      </div>
+      <div class="level-right">
+        <span class="tag is-light">{{ hypotheses|length }} total</span>
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="notification is-danger is-light">{{ error }}</div>
+    {% endif %}
+
+    {% if not hypotheses %}
+      <div class="notification is-light">No hypotheses generated yet.</div>
+    {% else %}
+      <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+          <thead>
+            <tr>
+              <th class="hypothesis-id-col">ID</th>
+              <th>Title</th>
+              <th>Expected impact <span class="help-tooltip" tabindex="0" aria-label="Planner estimate of likely benefit." data-tooltip="Planner estimate of how much this idea could improve retrieval quality before it is tested.">?</span></th>
+              <th>Rationale <span class="help-tooltip" tabindex="0" aria-label="Reason the idea was proposed." data-tooltip="Reason the planner proposed this change. Use it to judge whether the idea is worth testing again.">?</span></th>
+              <th class="hypothesis-date-col">Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for hypothesis in hypotheses %}
+              <tr>
+                <td class="hypothesis-id-col"><code>{{ hypothesis.id }}</code></td>
+                <td>{{ hypothesis.title }}</td>
+                <td>{{ hypothesis.expected_impact }}</td>
+                <td>{{ hypothesis.rationale }}</td>
+                <td class="hypothesis-date-col">{{ hypothesis.created_at_display }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

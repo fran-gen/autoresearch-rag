@@ -1,0 +1,302 @@
+{% extends "logged_in.html" %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">Leaderboards</p>
+        <h1 class="title is-3 mb-2">Top-performing experiment runs</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">Compare ranked runs, inspect score deltas, and review score distribution.</p>
+      </div>
+    </div>
+  </section>
+
+  {% if error %}
+    <div class="notification is-danger is-light page-block">{{ error }}</div>
+  {% endif %}
+
+  {% if not board_rows %}
+    <div class="notification is-light page-block">No leaderboard entries yet. Start a research loop to rank completed experiments here.</div>
+  {% else %}
+    <div class="leaderboard-overview-grid page-block">
+      <div class="box leaderboard-summary-card">
+          <p class="heading">Summary</p>
+          <h2 class="title is-5">Leaderboard snapshot</h2>
+          <p class="section-hint">A quick read on how many completed runs are ranked and the current top score.</p>
+
+          <div class="leaderboard-stat-grid">
+            <div><span>{{ board_rows|length }}</span><small>entries</small></div>
+            <div><span>{{ "%.4f"|format(board_rows[0].score_value) if board_rows[0].score_value is not none else "n/a" }}</span><small>top score</small></div>
+          </div>
+      </div>
+
+      <div class="box leaderboard-chart-card">
+          <p class="heading">Score distribution</p>
+          <h2 class="title is-5">Experiment score bars</h2>
+          <p class="section-hint">Compare run scores visually; taller bars indicate stronger retrieval performance.</p>
+
+          <div class="chart-canvas-wrap chart-canvas-wrap--small">
+            <canvas id="leaderboard-score-chart" aria-label="Leaderboard score distribution chart"></canvas>
+          </div>
+      </div>
+    </div>
+
+    <div class="box leaderboard-table-card">
+      <div class="level is-mobile mb-4">
+        <div class="level-left">
+          <div>
+            <p class="heading">Ranking table</p>
+            <h2 class="title is-5">Experiment leaderboard</h2>
+            <p class="section-hint">Runs are sorted by score so the best candidate is easiest to find.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Experiment</th>
+              <th>Score <span class="help-tooltip" tabindex="0" aria-label="Composite quality score for this run." data-tooltip="Composite quality score for this run. Higher is better.">?</span></th>
+              <th>Δ vs baseline <span class="help-tooltip" tabindex="0" aria-label="Difference from the baseline score." data-tooltip="Difference from the baseline score. Positive values mean the run improved on the baseline.">?</span></th>
+              <th>Accepted <span class="help-tooltip" tabindex="0" aria-label="Whether the run became the active candidate." data-tooltip="Accepted runs improved the candidate configuration; rejected runs did not.">?</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in board_rows %}
+              <tr>
+                <td>{{ row.rank }}</td>
+                <td><code>{{ row.experiment_id }}</code></td>
+                <td>{{ "%.4f"|format(row.score_value) if row.score_value is not none else "—" }}</td>
+                <td>{{ "%+.4f"|format(row.delta_value) if row.delta_value is not none else "—" }}</td>
+                <td>
+                  <span class="tag {% if row.accepted %}is-success is-light{% else %}is-danger is-light{% endif %}">
+                    {{ "Yes" if row.accepted else "No" }}
+                  </span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <section class="page-block" id="failure-analysis">
+      <div class="level is-mobile mb-4">
+        <div class="level-left">
+          <div>
+            <p class="heading">Failure analysis</p>
+            <h2 class="title is-5">Lowest-performing run diagnostics</h2>
+            <p class="section-hint">The weakest ranked run is analyzed here so you can inspect failure patterns without leaving the leaderboard.</p>
+          </div>
+        </div>
+      </div>
+
+      {% if worst %}
+        <div class="leaderboard-failure-grid page-block">
+            <div class="box">
+              <p class="heading">Worst experiment</p>
+              <h3 class="title is-5">Failure summary</h3>
+              <p class="section-hint">Use the lowest-ranked run as the fastest way to spot what still breaks.</p>
+
+              <div class="content">
+                <p><strong>Rank:</strong> {{ worst.rank }}</p>
+                <p><strong>ID:</strong> <code>{{ worst.experiment_id }}</code></p>
+                <p><strong>Score:</strong> {{ "%.4f"|format(worst.score_value) if worst.score_value is not none else "—" }}</p>
+                <p><strong>Delta vs baseline:</strong> {{ "%+.4f"|format(worst.delta_value) if worst.delta_value is not none else "—" }}</p>
+                <p><strong>Accepted:</strong> {{ "Yes" if worst.accepted else "No" }}</p>
+              </div>
+
+              {% if worst.failure_analysis %}
+                <div class="notification is-light">
+                  <p class="has-text-weight-semibold mb-2">Diagnostic note</p>
+                  <p>{{ worst.failure_analysis }}</p>
+                </div>
+              {% endif %}
+
+              {% if detail_error %}
+                <div class="notification is-danger is-light">{{ detail_error }}</div>
+              {% endif %}
+            </div>
+
+            <div class="box">
+              <p class="heading">Visual analysis</p>
+              <h3 class="title is-5">Question outcome distribution</h3>
+              <p class="section-hint">A quick split of correct, incorrect, and unknown outcomes for the weakest run.</p>
+
+              {% if failure_chart_rows %}
+                <div class="chart-canvas-wrap chart-canvas-wrap--small">
+                  <canvas id="failure-outcome-chart" aria-label="Failure outcome distribution chart"></canvas>
+                </div>
+                <p class="is-size-7 has-text-grey mt-3">Counts are calculated from question-level correctness values.</p>
+              {% else %}
+                <div class="notification is-light has-text-centered py-6">
+                  No question-level outcome data available yet.
+                </div>
+              {% endif %}
+            </div>
+        </div>
+
+        <div class="box">
+          <p class="heading">Diagnostics table</p>
+          <h3 class="title is-5">Question-level results</h3>
+          <p class="section-hint">Use these rows to identify recurring failure modes before changing retrieval settings.</p>
+
+          {% if not results %}
+            <div class="notification is-light">No question-level results recorded.</div>
+          {% else %}
+            <div class="table-container">
+              <table class="table is-fullwidth is-striped is-hoverable">
+                <thead>
+                  <tr>
+                    {% for key in results[0].keys() %}
+                      <th>{{ key }}{% if key in ["correct", "outcome", "latency_ms", "documents", "document_count"] %} <span class="help-tooltip" tabindex="0" aria-label="Diagnostic field for each evaluated question." data-tooltip="Diagnostic field for each evaluated question. Compare repeated values to find patterns in failures.">?</span>{% endif %}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in results %}
+                    <tr>
+                      {% for value in row.values() %}
+                        <td>{{ value }}</td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="notification is-light">No completed experiments yet.</div>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if board_rows %}
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        if (typeof Chart === 'undefined') {
+          return;
+        }
+
+        const rows = {{ board_rows | tojson }};
+        const scoreCanvas = document.getElementById('leaderboard-score-chart');
+        if (scoreCanvas) {
+          new Chart(scoreCanvas, {
+            type: 'bar',
+            data: {
+              labels: rows.map(function (row) { return row.experiment_id.slice(-8); }),
+              datasets: [
+                {
+                  label: 'Score',
+                  data: rows.map(function (row) { return row.score_value; }),
+                  backgroundColor: 'rgba(220, 36, 76, 0.82)',
+                  borderColor: 'rgba(220, 36, 76, 1)',
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  maxBarThickness: 52,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  display: false,
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (context) {
+                      return 'Score: ' + context.parsed.y.toFixed(4);
+                    },
+                  },
+                },
+              },
+              scales: {
+                x: {
+                  title: {
+                    display: true,
+                    text: 'Experiment',
+                  },
+                  grid: {
+                    display: false,
+                  },
+                },
+                y: {
+                  beginAtZero: true,
+                  title: {
+                    display: true,
+                    text: 'Score',
+                  },
+                },
+              },
+            },
+          });
+        }
+
+        const failureCanvas = document.getElementById('failure-outcome-chart');
+        const failureRows = {{ failure_chart_rows | tojson }};
+        if (failureCanvas && Array.isArray(failureRows) && failureRows.length) {
+          const total = failureRows.reduce(function (sum, row) { return sum + row.count; }, 0);
+          new Chart(failureCanvas, {
+            type: 'bar',
+            data: {
+              labels: failureRows.map(function (row) { return row.label; }),
+              datasets: [
+                {
+                  label: 'Questions',
+                  data: failureRows.map(function (row) { return row.count; }),
+                  backgroundColor: failureRows.map(function (row) { return row.color; }),
+                  borderColor: failureRows.map(function (row) { return row.color; }),
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  maxBarThickness: 56,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  display: false,
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (context) {
+                      const count = context.parsed.y;
+                      const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+                      return 'Questions: ' + count + ' (' + pct + '%)';
+                    },
+                  },
+                },
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    precision: 0,
+                  },
+                  title: {
+                    display: true,
+                    text: 'Question count',
+                  },
+                },
+                x: {
+                  grid: {
+                    display: false,
+                  },
+                },
+              },
+            },
+          });
+        }
+      });
+    </script>
+  {% endif %}
+{% endblock %}

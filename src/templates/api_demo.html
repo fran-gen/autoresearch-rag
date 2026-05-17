@@ -1,0 +1,45 @@
+{% extends "logged_in.html" %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">API demo</p>
+        <h1 class="title is-3 mb-2">Management API users</h1>
+      </div>
+    </div>
+  </section>
+
+  <div class="box">
+    {% if is_api_call %}
+      <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+          <thead>
+            <tr>
+              <th>First Name</th>
+              <th>Last Name</th>
+              <th>Total Sign-ins</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for user in users %}
+              <tr>
+                <td>{{ user.first_name }}</td>
+                <td>{{ user.last_name }}</td>
+                <td>{{ user.total_sign_ins }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="notification is-warning is-light">
+        {{ mgmt_error if mgmt_error else "Management API not setup. Check MGMT_API_CLIENT_ID and MGMT_API_CLIENT_SECRET." }}
+      </div>
+    {% endif %}
+
+    <div class="mt-5">
+      <a class="button is-link" href="{{ url_for('index') }}">Back to home</a>
+    </div>
+  </div>
+{% endblock %}

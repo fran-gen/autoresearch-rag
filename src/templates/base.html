@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Monotonic Labs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#13151a">
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/globals.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% block body %}{% endblock %}
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <script>
+    if (typeof Chart !== 'undefined') {
+      Chart.defaults.color = '#9ca3af';
+      Chart.defaults.borderColor = 'rgba(255, 255, 255, .08)';
+      Chart.defaults.plugins.tooltip.backgroundColor = '#1c1f27';
+      Chart.defaults.plugins.tooltip.borderColor = '#2d3040';
+      Chart.defaults.plugins.tooltip.borderWidth = 1;
+      Chart.defaults.plugins.tooltip.titleColor = '#e5e7eb';
+      Chart.defaults.plugins.tooltip.bodyColor = '#e5e7eb';
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('.navbar-burger').forEach(function (burger) {
+        burger.addEventListener('click', function () {
+          const target = document.getElementById(burger.dataset.target);
+          burger.classList.toggle('is-active');
+          if (target) {
+            target.classList.toggle('is-active');
+          }
+        });
+      });
+
+      document.querySelectorAll('[data-api-key-dropdown]').forEach(function (dropdown) {
+        const trigger = dropdown.querySelector('.api-key-trigger');
+        if (!trigger) {
+          return;
+        }
+
+        trigger.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          const isActive = dropdown.classList.toggle('is-active');
+          trigger.setAttribute('aria-expanded', String(isActive));
+        });
+
+        dropdown.addEventListener('click', function (event) {
+          event.stopPropagation();
+        });
+      });
+
+      document.addEventListener('click', function () {
+        document.querySelectorAll('[data-api-key-dropdown].is-active').forEach(function (dropdown) {
+          dropdown.classList.remove('is-active');
+          const trigger = dropdown.querySelector('.api-key-trigger');
+          if (trigger) {
+            trigger.setAttribute('aria-expanded', 'false');
+          }
+        });
+      });
+
+      document.querySelectorAll('[data-command-center-layout]').forEach(function (layout) {
+        const closeButtons = layout.querySelectorAll('[data-command-center-close]');
+        const openButtons = layout.querySelectorAll('[data-command-center-open]');
+        const card = layout.querySelector('#command-center-card');
+
+        if (!closeButtons.length || !openButtons.length || !card) {
+          return;
+        }
+
+        const setOpen = function (isOpen) {
+          layout.classList.toggle('is-command-center-closed', !isOpen);
+          card.setAttribute('aria-hidden', String(!isOpen));
+          closeButtons.forEach(function (button) {
+            button.setAttribute('aria-expanded', String(isOpen));
+          });
+          openButtons.forEach(function (button) {
+            button.setAttribute('aria-expanded', String(isOpen));
+          });
+        };
+
+        closeButtons.forEach(function (button) {
+          button.addEventListener('click', function (event) {
+            event.preventDefault();
+            setOpen(false);
+          });
+        });
+
+        openButtons.forEach(function (button) {
+          button.addEventListener('click', function (event) {
+            event.preventDefault();
+            setOpen(true);
+          });
+        });
+
+        setOpen(false);
+      });
+
+      const appShell = document.querySelector('[data-dashboard-status-url]');
+      if (appShell) {
+        let dashboardStatusTimer = null;
+        let dashboardStatusInFlight = false;
+
+        const setText = function (selector, value) {
+          const node = document.querySelector(selector);
+          if (node) {
+            node.textContent = value;
+          }
+        };
+
+        const setSidebarStateClass = function (node, stateClass) {
+          if (!node) {
+            return;
+          }
+          Array.from(node.classList).forEach(function (className) {
+            if (className.startsWith('is-')) {
+              node.classList.remove(className);
+            }
+          });
+          node.classList.add('is-' + (stateClass || 'light'));
+          if (stateClass && stateClass !== 'success') {
+            node.classList.add('is-light');
+          }
+        };
+
+        const updateCommandCenter = function (payload) {
+          const status = payload && payload.sidebar_status ? payload.sidebar_status : {};
+          const state = status.state || 'Ready';
+          const stateClass = status.state_class || 'light';
+          const lastError = status.last_error || '';
+          const isRunning = state === 'Running';
+          const accepted = Number(status.accepted || 0);
+          const rejected = Number(status.rejected || 0);
+          const progress = Math.max(0, Math.min(100, Number(status.progress_pct || 0)));
+
+          setSidebarStateClass(document.querySelector('[data-sidebar-state]'), stateClass);
+          setText('[data-sidebar-state]', state);
+          setText('[data-sidebar-updated-at]', status.updated_at || '—');
+          setText('[data-sidebar-accepted]', String(accepted));
+          setText('[data-sidebar-rejected]', String(rejected));
+          setText('[data-sidebar-best-score]', typeof status.best_score === 'number' ? status.best_score.toFixed(3) : '—');
+          setText('[data-sidebar-message]', lastError || status.message || 'No dashboard updates yet.');
+
+          const phase = document.querySelector('[data-sidebar-phase]');
+          if (phase) {
+            const phaseText = status.phase && state !== 'Ready' ? status.phase : '';
+            phase.textContent = phaseText;
+            phase.hidden = !phaseText;
+          }
+
+          const progressBar = document.querySelector('[data-sidebar-progress]');
+          if (progressBar) {
+            progressBar.style.width = progress + '%';
+          }
+
+          const pulse = document.querySelector('[data-sidebar-pulse]');
+          if (pulse) {
+            pulse.classList.toggle('is-running', isRunning);
+          }
+
+          const updateItem = document.querySelector('[data-sidebar-update-item]');
+          if (updateItem) {
+            updateItem.classList.toggle('is-live', isRunning && !lastError);
+            updateItem.classList.toggle('is-danger', Boolean(lastError));
+          }
+
+          const chipDot = document.querySelector('[data-command-chip-dot]');
+          if (chipDot) {
+            chipDot.classList.toggle('is-running', isRunning);
+            chipDot.classList.toggle('is-danger', Boolean(lastError));
+          }
+
+          setText('[data-command-chip-badge]', lastError ? '!' : isRunning ? 'live' : String(accepted + rejected));
+          appShell.dataset.dashboardRefreshEvery = String(payload.refresh_every || appShell.dataset.dashboardRefreshEvery || 5);
+          appShell.dataset.dashboardLiveMode = payload.live_mode ? '1' : '0';
+        };
+
+        const scheduleDashboardStatus = function () {
+          if (dashboardStatusTimer) {
+            clearTimeout(dashboardStatusTimer);
+          }
+          const refreshEvery = Math.max(3, parseInt(appShell.dataset.dashboardRefreshEvery || '5', 10) || 5);
+          dashboardStatusTimer = setTimeout(fetchDashboardStatus, refreshEvery * 1000);
+        };
+
+        const fetchDashboardStatus = function () {
+          if (dashboardStatusInFlight || document.hidden) {
+            scheduleDashboardStatus();
+            return;
+          }
+
+          dashboardStatusInFlight = true;
+          const url = new URL(appShell.dataset.dashboardStatusUrl, window.location.origin);
+          url.searchParams.set('_', String(Date.now()));
+          fetch(url.toString(), {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            cache: 'no-store',
+            credentials: 'same-origin',
+          })
+            .then(function (response) {
+              if (!response.ok) {
+                throw new Error('Dashboard status refresh failed');
+              }
+              return response.json();
+            })
+            .then(updateCommandCenter)
+            .catch(function () {})
+            .finally(function () {
+              dashboardStatusInFlight = false;
+              scheduleDashboardStatus();
+            });
+        };
+
+        scheduleDashboardStatus();
+      }
+
+      const globalTooltip = document.createElement('div');
+      globalTooltip.className = 'global-help-tooltip';
+      globalTooltip.setAttribute('role', 'tooltip');
+      document.body.appendChild(globalTooltip);
+
+      const showGlobalTooltip = function (trigger) {
+        const text = trigger.getAttribute('data-tooltip');
+        if (!text) {
+          return;
+        }
+
+        globalTooltip.textContent = text;
+        globalTooltip.classList.add('is-measuring');
+        globalTooltip.classList.remove('is-visible');
+
+        const triggerRect = trigger.getBoundingClientRect();
+        const tooltipRect = globalTooltip.getBoundingClientRect();
+        const gap = 10;
+        const margin = 12;
+        const left = Math.max(
+          margin,
+          Math.min(
+            window.innerWidth - tooltipRect.width - margin,
+            triggerRect.left + (triggerRect.width / 2) - (tooltipRect.width / 2)
+          )
+        );
+        let top = triggerRect.top - tooltipRect.height - gap;
+
+        if (top < margin) {
+          top = triggerRect.bottom + gap;
+        }
+
+        globalTooltip.style.left = left + 'px';
+        globalTooltip.style.top = Math.max(margin, top) + 'px';
+        globalTooltip.classList.remove('is-measuring');
+        requestAnimationFrame(function () {
+          globalTooltip.classList.add('is-visible');
+        });
+      };
+
+      const hideGlobalTooltip = function () {
+        globalTooltip.classList.remove('is-visible', 'is-measuring');
+      };
+
+      document.addEventListener('mouseover', function (event) {
+        const trigger = event.target.closest('.help-tooltip');
+        if (trigger) {
+          showGlobalTooltip(trigger);
+        }
+      });
+
+      document.addEventListener('focusin', function (event) {
+        const trigger = event.target.closest('.help-tooltip');
+        if (trigger) {
+          showGlobalTooltip(trigger);
+        }
+      });
+
+      document.addEventListener('mouseout', function (event) {
+        if (event.target.closest('.help-tooltip')) {
+          hideGlobalTooltip();
+        }
+      });
+
+      document.addEventListener('focusout', function (event) {
+        if (event.target.closest('.help-tooltip')) {
+          hideGlobalTooltip();
+        }
+      });
+
+      document.addEventListener('scroll', hideGlobalTooltip, true);
+      window.addEventListener('resize', hideGlobalTooltip);
+
+      const closeModal = function (modal) {
+        modal.classList.remove('is-active');
+        modal.setAttribute('aria-hidden', 'true');
+      };
+
+      document.addEventListener('click', function (event) {
+        const trigger = event.target.closest('.js-modal-trigger');
+        if (trigger) {
+          const modal = document.getElementById(trigger.dataset.target);
+          if (modal) {
+            modal.classList.add('is-active');
+            modal.setAttribute('aria-hidden', 'false');
+          }
+          return;
+        }
+
+        const close = event.target.closest('.modal .js-modal-close');
+        if (close) {
+          const modal = close.closest('.modal');
+          if (modal) {
+            closeModal(modal);
+          }
+        }
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
+          return;
+        }
+        document.querySelectorAll('.modal.is-active').forEach(closeModal);
+      });
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

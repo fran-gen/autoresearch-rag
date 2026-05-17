@@ -1,0 +1,288 @@
+{% extends "logged_in.html" %}
+
+{% block sidebar %}
+  <div class="notification is-light sidebar-panel">
+    <p class="has-text-weight-semibold mb-2">RAG test bench</p>
+    <p class="is-size-7">Ask a realistic enterprise question, inspect the answer, then verify which documents were retrieved.</p>
+  </div>
+{% endblock %}
+
+{% block main %}
+  <section class="level page-block">
+    <div class="level-left">
+      <div>
+        <p class="heading">AI Chat</p>
+        <h1 class="title is-3 mb-2">RAG playground</h1>
+        <p class="subtitle is-6 has-text-grey mb-0">A ChatGPT-style interface for testing retrieval quality against your benchmark documents.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="chat-shell page-block">
+    <div class="chat-panel">
+      <div class="chat-panel__header">
+        <div>
+          <p class="heading">Conversation</p>
+          <h2 class="title is-5">Ask the retrieval system</h2>
+        </div>
+        <div class="chat-header-actions">
+          <span class="tag is-link is-light">Gemini RAG</span>
+          <form method="post" action="{{ url_for('new_ai_chat') }}">
+            <button class="button is-small chat-header-button" type="submit">New chat</button>
+          </form>
+          <a class="button is-small chat-header-button" href="{{ url_for('export_ai_chat', session_id=chat_session_id) }}">Export</a>
+          <form method="post">
+            <input type="hidden" name="action" value="clear">
+            <button class="button is-small chat-header-button" type="submit">Clear</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="chat-panel__body">
+        <aside class="chat-history-panel" aria-label="Chat history">
+          <div class="chat-history-panel__header">
+            <div>
+              <p class="heading mb-1">Chats</p>
+              <h3 class="title is-6 mb-0">History</h3>
+            </div>
+            <form method="post" action="{{ url_for('new_ai_chat') }}">
+              <button class="button is-link is-light is-small" type="submit">+</button>
+            </form>
+          </div>
+          <div class="chat-session-list">
+            {% for item in chat_sessions %}
+              <a class="chat-session-item {% if item.id == chat_session_id %}is-active{% endif %}" href="{{ url_for('ai_chat', session_id=item.id) }}">
+                <span class="chat-session-item__title">{{ item.title }}</span>
+                <span class="chat-session-item__meta">{{ item.message_count }} messages · {{ item.updated_at_display }}</span>
+              </a>
+            {% endfor %}
+          </div>
+        </aside>
+
+        <div class="chat-conversation-panel">
+          <div class="chat-thread">
+            {% if chat_messages %}
+              {% for message in chat_messages %}
+                <article class="chat-message chat-message--{{ 'user' if message.role == 'user' else 'assistant' }}">
+                  <div class="chat-avatar">{{ 'You' if message.role == 'user' else 'AI' }}</div>
+                  <div class="chat-bubble{% if message.metadata is defined and message.metadata.error is defined and message.metadata.error %} chat-bubble--error{% endif %}" title="{{ message.content }}">
+                    <p>{{ message.content }}</p>
+                    {% if message.role == 'assistant' and message.metadata %}
+                      <div class="chat-meta mt-3">
+                        {% if message.metadata.model_label is defined and message.metadata.model_label %}<span>{{ message.metadata.model_label }}</span>{% endif %}
+                        {% if message.metadata.latency_ms is defined and message.metadata.latency_ms is not none %}<span>{{ "%.0f"|format(message.metadata.latency_ms) }} ms</span>{% endif %}
+                        {% if message.sources %}<span>{{ message.sources|length }} sources</span>{% endif %}
+                        {% if message.metadata.strategy is defined and message.metadata.strategy %}<span>{{ message.metadata.strategy }}</span>{% endif %}
+                      </div>
+                    {% endif %}
+                  </div>
+                </article>
+              {% endfor %}
+            {% else %}
+              <article class="chat-message chat-message--assistant">
+                <div class="chat-avatar">AI</div>
+                <div class="chat-empty-state">
+                  <p class="chat-empty-state__title">Start with a benchmark-style question.</p>
+                  <p class="chat-empty-state__copy">Responses use retrieved benchmark context and are saved to chat history.</p>
+                </div>
+              </article>
+            {% endif %}
+
+            {% if error %}
+              <article class="chat-message chat-message--assistant">
+                <div class="chat-avatar">AI</div>
+                <div class="chat-bubble chat-bubble--error">
+                  <p>{{ error }}</p>
+                </div>
+              </article>
+            {% endif %}
+
+            {% if not chat_messages %}
+              <div class="chat-prompt-chips" aria-label="Prompt ideas">
+                {% for prompt in sample_prompts %}
+                  <form method="post">
+                    <input type="hidden" name="question" value="{{ prompt }}">
+                    <input type="hidden" name="strategy" value="{{ strategy }}">
+                    <input type="hidden" name="top_k" value="{{ top_k }}">
+                    <button class="chat-prompt-chip" type="submit">{{ prompt }}</button>
+                  </form>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </div>
+
+          <form class="chat-composer" method="post" id="chat-composer-form">
+            <label class="is-sr-only" for="question">Ask a RAG question</label>
+            <textarea class="textarea" id="question" name="question" rows="2" placeholder="Ask about a policy, process, customer, product, or internal document..." required></textarea>
+
+            <div class="chat-composer__footer">
+              <div class="chat-controls">
+                <label class="label-with-help" for="strategy">
+                  <span class="is-size-7 has-text-grey">Mode</span>
+                  <span class="help-tooltip" tabindex="0" aria-label="Retrieval strategy used for this test." data-tooltip="Dense search uses embeddings. Hybrid search combines dense search with BM25 keyword matching.">?</span>
+                </label>
+                <div class="select is-small">
+                  <select id="strategy" name="strategy">
+                    <option value="dense" {% if strategy == "dense" %}selected{% endif %}>Dense</option>
+                    <option value="hybrid" {% if strategy == "hybrid" %}selected{% endif %}>Hybrid</option>
+                  </select>
+                </div>
+
+                <label class="label-with-help" for="top_k">
+                  <span class="is-size-7 has-text-grey">Top-k</span>
+                  <span class="help-tooltip" tabindex="0" aria-label="Number of documents retrieved before answering." data-tooltip="Number of documents retrieved before answering. Increase it to inspect broader context, reduce it to test precision.">?</span>
+                </label>
+                <input class="input is-small chat-top-k" id="top_k" name="top_k" type="number" min="1" max="8" value="{{ top_k }}">
+              </div>
+
+              <button class="button is-link chat-send-button" type="submit">
+                <span class="chat-send-button__idle">Send</span>
+                <span class="chat-send-button__loading">Thinking...</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <aside class="chat-sidecar">
+      <div class="box chat-sidecar-card">
+        <p class="heading">Retrieved sources</p>
+        <h2 class="title is-6">Context inspector</h2>
+        {% if active_sources %}
+          <div class="retrieval-scatter-card mb-4">
+            <div class="is-flex is-justify-content-space-between is-align-items-flex-start gap-2 mb-3">
+              <div>
+                <p class="has-text-weight-semibold mb-1">Top-k distance map</p>
+                <p class="field-hint mb-0">Each point is a retrieved document. Lower distance means a closer match to the question.</p>
+              </div>
+              <span class="tag is-light">k={{ active_sources|length }}</span>
+            </div>
+            <div class="chart-canvas-wrap chart-canvas-wrap--scatter">
+              <canvas id="rag-distance-scatter" aria-label="Retrieved document distance scatter plot"></canvas>
+            </div>
+          </div>
+
+          <div class="source-stack">
+            {% for doc in active_sources %}
+              <article class="source-card">
+                <div class="source-card__header">
+                  <code>{{ doc.id }}</code>
+                  <span>{{ "%.3f"|format(doc.score) if doc.score is defined and doc.score is not none else "—" }}</span>
+                </div>
+                <p class="is-size-7 has-text-grey mb-2">{{ doc.source_type }}</p>
+                <p>{{ doc.preview }}</p>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="is-size-7 has-text-grey">Sources appear here after you send a question.</p>
+        {% endif %}
+      </div>
+    </aside>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const form = document.getElementById('chat-composer-form');
+      if (!form) {
+        return;
+      }
+
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('.chat-send-button');
+        if (button) {
+          button.classList.add('is-loading-chat');
+          button.disabled = true;
+        }
+      });
+
+      const scatterCanvas = document.getElementById('rag-distance-scatter');
+      const sources = {{ active_sources | tojson }};
+      if (scatterCanvas && typeof Chart !== 'undefined' && Array.isArray(sources) && sources.length) {
+        const points = sources.map(function (source, index) {
+          const score = typeof source.score === 'number' ? source.score : Number(source.score || 0);
+          return {
+            x: index + 1,
+            y: Math.max(0, 1 - score),
+            score: score,
+            id: source.id,
+            sourceType: source.source_type || 'unknown',
+          };
+        });
+
+        new Chart(scatterCanvas, {
+          type: 'scatter',
+          data: {
+            datasets: [
+              {
+                label: 'Retrieved document distance',
+                data: points,
+                parsing: false,
+                pointRadius: points.map(function (point) { return Math.max(5, Math.min(13, point.score * 14)); }),
+                pointHoverRadius: 14,
+                pointBackgroundColor: points.map(function (point, index) {
+                  return index === 0 ? 'rgba(34, 197, 94, 0.92)' : 'rgba(220, 36, 76, 0.82)';
+                }),
+                pointBorderColor: 'rgba(255, 255, 255, 0.72)',
+                pointBorderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false,
+              },
+              tooltip: {
+                callbacks: {
+                  title: function (items) {
+                    const point = items[0].raw;
+                    return point.id;
+                  },
+                  label: function (context) {
+                    const point = context.raw;
+                    return [
+                      'Rank: ' + point.x,
+                      'Distance: ' + point.y.toFixed(3),
+                      'Similarity: ' + point.score.toFixed(3),
+                      'Source: ' + point.sourceType,
+                    ];
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                min: 0.5,
+                max: sources.length + 0.5,
+                ticks: {
+                  stepSize: 1,
+                },
+                title: {
+                  display: true,
+                  text: 'Retrieved rank',
+                },
+                grid: {
+                  display: false,
+                },
+              },
+              y: {
+                beginAtZero: true,
+                suggestedMax: 1,
+                title: {
+                  display: true,
+                  text: 'Approx. distance (1 - score)',
+                },
+              },
+            },
+          },
+        });
+      }
+    });
+  </script>
+{% endblock %}
