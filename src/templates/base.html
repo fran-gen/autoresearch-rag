@@ -223,6 +223,79 @@
         scheduleDashboardStatus();
       }
 
+      const globalTooltip = document.createElement('div');
+      globalTooltip.className = 'global-help-tooltip';
+      globalTooltip.setAttribute('role', 'tooltip');
+      document.body.appendChild(globalTooltip);
+
+      const showGlobalTooltip = function (trigger) {
+        const text = trigger.getAttribute('data-tooltip');
+        if (!text) {
+          return;
+        }
+
+        globalTooltip.textContent = text;
+        globalTooltip.classList.add('is-measuring');
+        globalTooltip.classList.remove('is-visible');
+
+        const triggerRect = trigger.getBoundingClientRect();
+        const tooltipRect = globalTooltip.getBoundingClientRect();
+        const gap = 10;
+        const margin = 12;
+        const left = Math.max(
+          margin,
+          Math.min(
+            window.innerWidth - tooltipRect.width - margin,
+            triggerRect.left + (triggerRect.width / 2) - (tooltipRect.width / 2)
+          )
+        );
+        let top = triggerRect.top - tooltipRect.height - gap;
+
+        if (top < margin) {
+          top = triggerRect.bottom + gap;
+        }
+
+        globalTooltip.style.left = left + 'px';
+        globalTooltip.style.top = Math.max(margin, top) + 'px';
+        globalTooltip.classList.remove('is-measuring');
+        requestAnimationFrame(function () {
+          globalTooltip.classList.add('is-visible');
+        });
+      };
+
+      const hideGlobalTooltip = function () {
+        globalTooltip.classList.remove('is-visible', 'is-measuring');
+      };
+
+      document.addEventListener('mouseover', function (event) {
+        const trigger = event.target.closest('.help-tooltip');
+        if (trigger) {
+          showGlobalTooltip(trigger);
+        }
+      });
+
+      document.addEventListener('focusin', function (event) {
+        const trigger = event.target.closest('.help-tooltip');
+        if (trigger) {
+          showGlobalTooltip(trigger);
+        }
+      });
+
+      document.addEventListener('mouseout', function (event) {
+        if (event.target.closest('.help-tooltip')) {
+          hideGlobalTooltip();
+        }
+      });
+
+      document.addEventListener('focusout', function (event) {
+        if (event.target.closest('.help-tooltip')) {
+          hideGlobalTooltip();
+        }
+      });
+
+      document.addEventListener('scroll', hideGlobalTooltip, true);
+      window.addEventListener('resize', hideGlobalTooltip);
+
       const closeModal = function (modal) {
         modal.classList.remove('is-active');
         modal.setAttribute('aria-hidden', 'true');

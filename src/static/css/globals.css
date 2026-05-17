@@ -1898,13 +1898,7 @@ body::after {
 
 .help-tooltip::before,
 .help-tooltip::after {
-  position: absolute;
-  left: 50%;
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, 0.25rem);
-  transition: opacity var(--transition), transform var(--transition);
-  z-index: 300;
+  display: none;
 }
 
 .help-tooltip::before {
@@ -1936,8 +1930,39 @@ body::after {
 .help-tooltip:hover::after,
 .help-tooltip:focus::before,
 .help-tooltip:focus::after {
+  display: none;
+}
+
+.global-help-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  width: max-content;
+  max-width: min(18rem, calc(100vw - 1.5rem));
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .34), 0 0 0 1px rgba(255, 255, 255, .04);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(0.25rem) scale(.98);
+  transition: opacity var(--transition), transform var(--transition);
+}
+
+.global-help-tooltip.is-measuring {
+  opacity: 0;
+  transform: none;
+}
+
+.global-help-tooltip.is-visible {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translateY(0) scale(1);
 }
 
 /* ── Buttons — primary (is-link → red) ────────────────────────────── */
