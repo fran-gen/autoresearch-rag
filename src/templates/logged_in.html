@@ -33,22 +33,48 @@
               <span>Dataset</span>
             </a>
 
+            <div class="navbar-item has-dropdown api-key-dropdown" data-api-key-dropdown>
+              <button class="navbar-link api-key-trigger" type="button" aria-haspopup="true" aria-expanded="false">
+                API Key
+              </button>
+
+              <div class="navbar-dropdown is-right">
+                <p class="api-key-menu__title">Use your API key</p>
+                <p class="api-key-menu__copy">Paste a Google Gemini API key for this runtime session. It won't be saved.</p>
+                <form class="api-key-form" method="post" action="{{ url_for('dashboard_api_key') }}">
+                  <input type="hidden" name="next" value="{{ request.path }}">
+                  <div class="field">
+                    <label class="label is-small" for="navbar_api_key">API key</label>
+                    <div class="control">
+                      <input class="input is-small" id="navbar_api_key" name="api_key" type="password" autocomplete="off" placeholder="Paste your API key">
+                    </div>
+                  </div>
+                  <div class="field is-grouped">
+                    <div class="control">
+                      <button class="button is-link is-small" type="submit">Apply key</button>
+                    </div>
+                  </div>
+                </form>
+                <p class="api-key-menu__status">Leave the field empty and apply to clear it from runtime memory.</p>
+              </div>
+            </div>
+
             <div class="navbar-item has-dropdown is-hoverable app-navbar-account">
               <a class="navbar-link app-navbar-profile">
                 {% if user_picture %}
                   <figure class="image is-24x24 avatar-image">
-                    <img class="is-rounded" src="{{ user_picture }}" alt="{{ user_given_name }} {{ user_family_name }}">
+                    <img class="is-rounded" src="{{ user_picture }}" alt="{{ user_display_name }}">
                   </figure>
                 {% else %}
                   <span class="tag is-link is-light is-rounded">{{ user_initials }}</span>
                 {% endif %}
-                <span>{{ user_given_name }} {{ user_family_name }}</span>
+                <span>{{ user_display_name }}</span>
               </a>
 
               <div class="navbar-dropdown is-right">
                 <div class="navbar-item">
                   <div>
-                    <p class="has-text-weight-semibold">{{ user_given_name }} {{ user_family_name }}</p>
+                    <p class="has-text-weight-semibold">{{ user_display_name }}</p>
                   </div>
                 </div>
                 <hr class="navbar-divider">

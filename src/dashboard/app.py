@@ -390,6 +390,15 @@ def get_user_initials(user_data: dict[str, str | None]) -> str:
     return initials.upper() or "KU"
 
 
+def get_user_display_name(user_data: dict[str, str | None]) -> str:
+    name_parts = [
+        part.strip()
+        for part in (user_data.get("user_given_name"), user_data.get("user_family_name"))
+        if part and part.strip()
+    ]
+    return " ".join(name_parts) or user_data.get("user_email") or "User"
+
+
 def build_nav_items() -> list[dict[str, str | bool]]:
     current_endpoint = request.endpoint or ""
     return [
@@ -1943,6 +1952,7 @@ def inject_template_context():
         "current_endpoint": request.endpoint,
         "nav_items": build_nav_items(),
         "user_initials": get_user_initials(user_data),
+        "user_display_name": get_user_display_name(user_data),
         "dashboard_live_mode": normalize_bool(session.get("live_mode"), default=False),
         "dashboard_refresh_every": normalize_refresh_seconds(session.get("refresh_every")),
         "sidebar_status": get_sidebar_status_snapshot(),
