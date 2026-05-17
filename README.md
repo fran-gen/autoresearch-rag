@@ -1,71 +1,39 @@
-# AutoResearch Lab
 
-AutoResearch Lab is a multi-agent autonomous research system for improving enterprise Retrieval-Augmented Generation (RAG) pipelines through iterative, benchmark-driven experiments.
 
-## Current Project State
+# AutoRAG Research Lab
 
-The current implementation is functional end-to-end and includes:
+An automated research and experimentation platform for enterprise Retrieval-Augmented Generation (RAG) systems. Built as a showcase project for a hackathon, this platform enables developers and researchers to systematically benchmark, evaluate, and optimize RAG pipelines.
 
-- A LangGraph-based research loop with four core agents:
-  - `Researcher`: proposes retrieval hypotheses.
-  - `Planner`: mutates candidate retrieval configurations.
-  - `Worker`: runs deterministic A/B benchmark experiments.
-  - `Evaluator`: promotes candidates only when they beat the incumbent baseline.
-- Retrieval backends:
-  - Dense retrieval (sentence-transformers embeddings).
-  - Hybrid retrieval (BM25 + dense fusion).
-  - Optional cross-encoder reranking.
-- Benchmarking stack for EnterpriseRAG-Bench style evaluation:
-  - Dataset loading utilities.
-  - Experiment runner.
-  - Metric computation and composite scoring.
-- Backend APIs for research orchestration and experiment inspection.
-- Web dashboard/UI templates for monitoring runs and viewing experiment details.
-- Local persistence for experiment metadata and outcomes.
-- Docker-based local development support.
+## 🚀 Features Showcase
 
-## High-Level Architecture
+Designed with experimentation in mind, the AutoRAG Research Lab provides a comprehensive suite of tools to take your RAG systems from proof-of-concept to production-ready:
 
-`UI / Dashboard` -> `API layer` -> `LangGraph agent loop` -> `Retrieval + Benchmark runner` -> `Experiment store`
+- **🤖 Autonomous AI Agents**: Orchestrates specialized agents (Planner, Worker, Researcher, Evaluator) to automatically formulate hypotheses, build retrieval pipelines, and evaluate their performance.
+- **📊 Comprehensive Benchmarking**: Built-in support for benchmark datasets (like the Karpathy Sandbox) to rigorously test retrieval accuracy, context relevance, and generation quality.
+- **🔍 Pluggable Retrieval Pipelines**: Easily configure and swap out different retrieval strategies, including Dense (vector-based), Sparse (BM25), and Hybrid retrieval methods.
+- **📈 Interactive Dashboard**: A sleek, real-time web interface to track ongoing experiments, compare leaderboard results, visualize metrics, and manage research hypotheses.
+- **🧠 Advanced RAG Techniques**: Native support for state-of-the-art techniques like reranking and custom embedding models to squeeze the maximum performance out of your knowledge base.
 
-The loop is monotonic by design: new configurations are promoted only when measured improvement is above threshold.
+## 🛠 Tech Stack Deep Dive
 
-## Repository Layout
+The project is built on a modern, scalable, and modular architecture, separating the heavy AI workloads from the user-facing interfaces.
 
-```text
-src/
-  agents/         # research, planning, execution, evaluation logic
-  retrieval/      # dense/hybrid retrievers, embeddings, reranker
-  benchmark/      # dataset loader, runner, metrics
-  api/            # FastAPI app and routes
-  dashboard/      # dashboard app and server config
-  templates/      # HTML templates for web views
-  static/         # CSS and assets
-  db.py           # persistence layer
-  config.py       # environment-driven settings
-  models.py       # data models
-scripts/          # dataset setup and utility scripts
-Dockerfile
-docker-compose.yml
-pyproject.toml
-requirements.txt
-```
+### Core AI & Backend
 
-## Tech Stack
+- **Python (>=3.11)**: The backbone of the entire application.
+- **LangChain & LangGraph**: Used for complex agent orchestration, state management, and seamless integrations with Google GenAI and other LLM providers.
+- **FastAPI & Uvicorn**: Provides a blazing-fast, asynchronous REST API to handle agent requests and system communications.
+- **Qdrant**: High-performance vector database used for storing and querying dense embeddings.
+- **Sentence Transformers**: Generates state-of-the-art text embeddings for semantic search.
+- **rank-bm25**: Powers the sparse retrieval components for keyword-based search.
+- **SQLite (aiosqlite)**: Lightweight, asynchronous database for storing experiment results, hypotheses, and system state.
+- **Docker**: Ensures consistent and reproducible environments across different setups.
 
-- Python 3.11+
-- FastAPI + Uvicorn
-- Google Gemini LLMs
-- Google AI Studio
-- LangGraph / LangChain Core
-- Hugging Face Transformers
-- Hugging Face Datasets
-- sentence-transformers
-- rank-bm25
-- qdrant-client
-- Flask (dashboard/auth session support)
-- SQLite (experiment persistence)
+### Frontend
 
-## Goal
+- **Flask & Werkzeug**: Serves the interactive web dashboard and manages session state.
+- **Jinja2**: Powers the dynamic HTML templates (`src/templates`).
+- **Bulma CSS**: A modern CSS framework used for clean, responsive, and maintainable styling without writing complex custom CSS.
+- **Chart.js**: Renders interactive, real-time charts and visual metrics for experiment leaderboards.
 
-Continuously improve retrieval quality on enterprise-style RAG workloads while keeping results reproducible, measurable, and easy to inspect.
+[![Contributors](https://contrib.rocks/image?repo=fran-gen/autoresearch-rag)](https://github.com/fran-gen/autoresearch-rag/graphs/contributors)
