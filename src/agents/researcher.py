@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage
 
 from src.agents.history import format_best_config_json, format_experiment_history, format_rejected_experiments_summary
 from src.agents.state import ResearchLabState
+from src.agents.text_utils import extract_text_content
 from src.config import get_google_api_key, get_settings
 from src.models import Hypothesis
 
@@ -75,7 +76,7 @@ async def researcher_agent(state: ResearchLabState) -> ResearchLabState:
                     temperature=0.4,
                 )
                 response = await llm.ainvoke([HumanMessage(content=prompt)])
-                text = str(response.content)
+                text = extract_text_content(response.content)
                 parts = [p.strip() for p in text.split("|||")]
                 if len(parts) == 3:
                     hypothesis = Hypothesis(

@@ -11,6 +11,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
 from src.agents.state import ResearchLabState
+from src.agents.text_utils import extract_text_content
 from src.benchmark.loader import EnterpriseRagBenchLoader
 from src.config import get_google_api_key, get_settings
 from src.models import ExperimentStatus, QuestionResult
@@ -127,7 +128,7 @@ async def _generate_final_report(state: ResearchLabState) -> str:
     """Ask the LLM for a synthesis of the research session."""
     settings = get_settings()
     if not settings.has_google_key:
-        return _fallback_report(state)
+        return _with_best_artifacts(state, _fallback_report(state))
 
     results = state.get("results", [])
     initial = state.get("initial_baseline_score", -1.0)
@@ -166,9 +167,9 @@ async def _generate_final_report(state: ResearchLabState) -> str:
             temperature=0.3,
         )
         response = await llm.ainvoke([HumanMessage(content=prompt)])
-        return str(response.content)
+        return _with_best_artifacts(state, extract_text_content(response.content))
     except Exception:
-        return _fallback_report(state)
+        return _with_best_artifacts(state, _fallback_report(state))
 
 
 def _fallback_report(state: ResearchLabState) -> str:
@@ -185,6 +186,49 @@ def _fallback_report(state: ResearchLabState) -> str:
         f"(+{delta:.4f}, +{pct:.1f}%).\n\n"
         f"Remaining weak areas: {state.get('per_type_summary', 'N/A')}"
     )
+
+
+def _with_best_artifacts(state: ResearchLabState, report: str) -> str:
+    if state.get("accepted_experiments", 0) <= 0 or state.get("best_score", -1.0) < 0:
+        return report
+
+    best_config = state.get("best_config")
+    if best_config is None:
+        return report
+
+    config_json = best_config.model_dump_json(
+        indent=2,
+        exclude={"embedding_model", "evaluation_mode"},
+    )
+    lines = [
+        report.rstrip(),
+        "",
+        "## Best configuration and code",
+        "",
+        f"- Best score: {state.get('best_score', 0.0):.4f}",
+        f"- Accepted experiments: {state.get('accepted_experiments', 0)}",
+        "- Best config:",
+        "",
+        "```json",
+        config_json,
+        "```",
+    ]
+
+    if state.get("research_mode") == "karpathy":
+        code = (state.get("current_pipeline_code") or "").strip()
+        lines.extend(
+            [
+                "- Best accepted pipeline code: session-scoped Karpathy pipeline.",
+                "",
+                "```python",
+                code or "# No accepted pipeline code was recorded.",
+                "```",
+            ]
+        )
+    else:
+        lines.append("- Code path: `src/retrieval/pipeline.py`")
+
+    return "\n".join(lines)
 
 
 async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:

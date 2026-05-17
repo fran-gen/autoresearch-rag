@@ -4,6 +4,7 @@ import difflib
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import uuid
@@ -20,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 from flask import Flask, Response, flash, has_request_context, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
+from markupsafe import Markup, escape
 import requests
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
@@ -29,6 +31,7 @@ from kinde_sdk.auth.oauth import OAuth
 
 from src.benchmark.loader import EnterpriseRagBenchLoader
 from src.config import get_settings
+from src.agents.text_utils import extract_text_content
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -121,6 +124,7 @@ configure_kinde_environment()
 API_BASE = os.getenv("API_BASE", "http://localhost:8001").rstrip("/")
 DEFAULT_API_UPSTREAM = "http://localhost:8001"
 DEFAULT_REFRESH_SECONDS = 5
+MAX_RESEARCH_ITERATIONS = 10
 PUBLIC_ENDPOINTS = {"up", "index", "login", "logout", "register", "callback", "dashboard_logout", "static", "api_proxy"}
 AUTH_ENDPOINTS = {"login", "register", "callback", "logout"}
 _kinde_callback_url = (os.getenv("KINDE_CALLBACK_URL") or "").strip()
@@ -578,6 +582,101 @@ def serialize_for_template(value: Any) -> str:
         except TypeError:
             return str(value)
     return str(value)
+
+
+def normalize_display_text(value: Any, fallback: str = "") -> str:
+    text = extract_text_content(value).strip()
+    if not text:
+        return fallback
+    return text.replace("\\n", "\n")
+
+
+def render_markdown(value: Any) -> Markup:
+    text = normalize_display_text(value)
+    if not text:
+        return Markup("")
+
+    html: list[str] = []
+    paragraph: list[str] = []
+    list_type: str | None = None
+    in_code = False
+    code_lines: list[str] = []
+    code_lang = ""
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            html.append(f"<p>{_render_inline_markdown(' '.join(paragraph))}</p>")
+            paragraph.clear()
+
+    def close_list() -> None:
+        nonlocal list_type
+        if list_type:
+            html.append(f"</{list_type}>")
+            list_type = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if in_code:
+                html.append(
+                    f"<pre><code class=\"language-{escape(code_lang)}\">"
+                    f"{escape(chr(10).join(code_lines))}</code></pre>"
+                )
+                code_lines = []
+                code_lang = ""
+                in_code = False
+            else:
+                flush_paragraph()
+                close_list()
+                code_lang = stripped.strip("`").strip()[:24]
+                in_code = True
+            continue
+        if in_code:
+            code_lines.append(line)
+            continue
+
+        if not stripped:
+            flush_paragraph()
+            close_list()
+            continue
+
+        heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if heading:
+            flush_paragraph()
+            close_list()
+            level = min(4, len(heading.group(1)) + 2)
+            html.append(f"<h{level}>{_render_inline_markdown(heading.group(2))}</h{level}>")
+            continue
+
+        bullet = re.match(r"^[-*]\s+(.+)$", stripped)
+        ordered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+        if bullet or ordered:
+            flush_paragraph()
+            target_list = "ol" if ordered else "ul"
+            if list_type != target_list:
+                close_list()
+                html.append(f"<{target_list}>")
+                list_type = target_list
+            item = bullet.group(1) if bullet else ordered.group(1)
+            html.append(f"<li>{_render_inline_markdown(item)}</li>")
+            continue
+
+        close_list()
+        paragraph.append(stripped)
+
+    if in_code:
+        html.append(f"<pre><code>{escape(chr(10).join(code_lines))}</code></pre>")
+    flush_paragraph()
+    close_list()
+    return Markup("\n".join(html))
+
+
+def _render_inline_markdown(value: str) -> Markup:
+    html = str(escape(value))
+    html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html)
+    html = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", html)
+    return Markup(html)
 
 
 RESEARCH_SETUP_SCHEMA_SQL = """
@@ -1082,13 +1181,12 @@ def build_taxonomy_rows(taxonomy: dict | None) -> list[dict[str, object]]:
 def build_dataset_readiness_rows(readiness: dict | None) -> list[dict[str, object]]:
     readiness = readiness or {}
     if "ready" in readiness:
+        data_loaded = bool(readiness.get("has_documents") and readiness.get("has_questions"))
+        index_loaded = bool(readiness.get("qdrant_ready") or readiness.get("qdrant_busy"))
         return [
-            {"label": "Status", "value": "Ready" if readiness.get("ready") else "No data available"},
-            {"label": "Message", "value": readiness.get("message", "—")},
-            {"label": "Documents", "value": readiness.get("document_count", "—")},
-            {"label": "Indexed", "value": readiness.get("indexed_count", "—")},
-            {"label": "Documents dir", "value": readiness.get("documents_dir", "—")},
-            {"label": "Qdrant", "value": readiness.get("qdrant_location", "—")},
+            {"label": "Data loaded", "value": "Yes" if data_loaded else "No"},
+            {"label": "Embedding index", "value": "Loaded" if index_loaded else "Not ready"},
+            {"label": "Overall status", "value": "Ready" if readiness.get("ready") else "Needs setup"},
         ]
     return [
         {"label": "Documents", "value": readiness.get("documents", "—")},
@@ -1107,9 +1205,9 @@ def build_hypothesis_rows(items: list[dict] | None) -> list[dict[str, object]]:
         rows.append(
             {
                 "id": item.get("id") or "—",
-                "title": item.get("title") or "Untitled",
-                "rationale": item.get("rationale") or "—",
-                "expected_impact": item.get("expected_impact") or "—",
+                "title": normalize_display_text(item.get("title"), "Untitled"),
+                "rationale": normalize_display_text(item.get("rationale"), "—"),
+                "expected_impact": normalize_display_text(item.get("expected_impact"), "—"),
                 "created_at_display": format_datetime(item.get("created_at")),
                 "created_at_sort": created_at,
             }
@@ -1553,9 +1651,26 @@ def build_journey_entries(score_history: list[dict] | None, baseline_config: dic
                 "baseline": baseline,
                 "delta": delta,
                 "accepted": accepted,
-                "icon": "✅" if accepted else "❌",
-                "hypothesis": entry.get("hypothesis") or "",
+                "icon": "✓" if accepted else "×",
+                "hypothesis": normalize_display_text(entry.get("hypothesis")),
                 "config_items": build_config_items(entry.get("config"), baseline_config),
+            }
+        )
+    return entries
+
+
+def build_code_history_entries(code_history: list[dict] | None, baseline_config: dict | None) -> list[dict[str, object]]:
+    entries = []
+    for entry in code_history or []:
+        if not isinstance(entry, dict):
+            continue
+        proposed_config = entry.get("proposed_config") if isinstance(entry.get("proposed_config"), dict) else None
+        entries.append(
+            {
+                **entry,
+                "hypothesis": normalize_display_text(entry.get("hypothesis")),
+                "diff_summary": normalize_display_text(entry.get("diff_summary")),
+                "config_items": build_config_items(proposed_config, baseline_config),
             }
         )
     return entries
@@ -1627,6 +1742,8 @@ def get_dashboard_status():
         status, error = None, None
     if isinstance(status, dict) and status.get("run_id"):
         session["research_run_id"] = status["run_id"]
+        for key in ("latest_summary", "planner_rationale", "final_report", "recommendation", "validation_summary"):
+            status[key] = normalize_display_text(status.get(key))
     is_running = bool(status and status.get("running"))
     show_running_animation = bool(session.get("research_pending") or is_running)
 
@@ -1663,8 +1780,8 @@ def get_dashboard_status():
         selected_max_iterations = int(status_max_iterations)
     else:
         selected_max_iterations = int(session.get("max_iterations") or status_max_iterations or 5)
-    selected_max_iterations = max(1, min(100, selected_max_iterations))
-    code_history = status.get("code_history", []) if status else []
+    selected_max_iterations = max(1, min(MAX_RESEARCH_ITERATIONS, selected_max_iterations))
+    code_history = build_code_history_entries(status.get("code_history", []) if status else [], baseline_config)
     karpathy_branch = status.get("karpathy_branch", "") if status else ""
     initial_pipeline_code = status.get("initial_pipeline_code", "") if status else ""
     current_pipeline_code = status.get("current_pipeline_code", "") if status else ""
@@ -1711,6 +1828,7 @@ def get_dashboard_status():
         "dataset_readiness_rows": build_dataset_readiness_rows(status.get("dataset_readiness") if status else None),
         "recommendation": status.get("recommendation") if status else None,
         "validation_summary": status.get("validation_summary") if status else None,
+        "final_report_html": render_markdown(status.get("final_report") if status else None),
         "tried_config_count": status.get("tried_config_count") if status else 0,
         "rejected_config_count": status.get("rejected_config_count") if status else 0,
         "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1795,18 +1913,20 @@ def get_sidebar_status_snapshot() -> dict[str, object]:
     progress_pct = int((iteration / max(max_iterations, 1)) * 100) if max_iterations else 0
     last_error = status.get("last_error")
     final_report = status.get("final_report")
-    state = "Running" if running else "Complete" if final_report else "Ready"
-    state_class = "success" if running else "link" if final_report else "light"
+    phase = normalize_display_text(status.get("phase"))
+    stopped = phase == "stopped"
+    state = "Running" if running else "Stopped" if stopped else "Complete" if final_report else "Ready"
+    state_class = "success" if running else "warning" if stopped else "link" if final_report else "light"
 
     return {
         "reachable": True,
         "state": state,
         "state_class": state_class,
-        "phase": status.get("phase") or "idle",
+        "phase": phase if running or final_report or stopped else "",
         "iteration": iteration,
         "max_iterations": max_iterations,
         "progress_pct": max(0, min(100, progress_pct)),
-        "message": status.get("latest_summary") or "No updates yet.",
+        "message": normalize_display_text(status.get("latest_summary"), "No updates yet."),
         "last_error": last_error,
         "accepted": status.get("accepted_experiments") or 0,
         "rejected": status.get("rejected_experiments") or 0,
@@ -1919,7 +2039,7 @@ def save_research_mode():
 
     max_iterations = request.form.get("max_iterations", type=int)
     if max_iterations is not None:
-        session["max_iterations"] = max(1, min(100, max_iterations))
+        session["max_iterations"] = max(1, min(MAX_RESEARCH_ITERATIONS, max_iterations))
 
     return "", 204
 
@@ -1927,7 +2047,7 @@ def save_research_mode():
 @app.route("/start_research", methods=["POST"])
 def start_research():
     max_iterations = request.form.get("max_iterations", type=int) or 5
-    max_iterations = max(1, min(100, max_iterations))
+    max_iterations = max(1, min(MAX_RESEARCH_ITERATIONS, max_iterations))
     refresh_every = normalize_refresh_seconds(request.form.get("refresh", type=int))
     live_mode = request.form.get("live") == "1"
     question_focus = (request.form.get("question_focus") or "all").strip()
@@ -1996,6 +2116,21 @@ def start_research():
         session["research_pending"] = True
         flash(f"Started tuned loop for {question_label} with {dataset_label}.", "success")
 
+    return redirect(url_for("experiments"))
+
+
+@app.route("/stop_research", methods=["POST"])
+def stop_research():
+    run_id = str(session.get("research_run_id") or "").strip()
+    params = {"run_id": run_id} if run_id else {}
+    payload, error = api_request("POST", "/research/stop", params=params)
+    session.pop("research_pending", None)
+    if error:
+        flash(f"Could not stop experiment: {error}", "error")
+    elif payload and payload.get("status") == "stopped":
+        flash("Experiment run stopped.", "warning")
+    else:
+        flash("Stop request sent.", "warning")
     return redirect(url_for("experiments"))
 
 

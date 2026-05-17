@@ -79,7 +79,9 @@
                     <span class="tag is-{{ sidebar_status.state_class if sidebar_status else 'light' }} {% if sidebar_status and sidebar_status.state_class != 'success' %}is-light{% endif %}">{{ sidebar_status.state if sidebar_status else 'Ready' }}</span>
                     <span class="sidebar-time">{{ sidebar_status.updated_at if sidebar_status and sidebar_status.updated_at else '—' }}</span>
                   </div>
-                  <p class="sidebar-status-card__phase">{{ sidebar_status.phase if sidebar_status and sidebar_status.phase else 'idle' }}</p>
+                  {% if sidebar_status and sidebar_status.state != 'Ready' and sidebar_status.phase %}
+                    <p class="sidebar-status-card__phase">{{ sidebar_status.phase }}</p>
+                  {% endif %}
                   <div class="sidebar-progress-track" aria-label="Research progress">
                     <span style="width: {{ sidebar_status.progress_pct if sidebar_status else 0 }}%"></span>
                   </div>

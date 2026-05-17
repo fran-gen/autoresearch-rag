@@ -1364,6 +1364,51 @@ body::after {
   background: rgba(34, 197, 94, .13);
 }
 
+.live-insight-panel {
+  border-color: rgba(99, 102, 241, .28);
+}
+
+.live-insight-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.live-insight-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, .9fr);
+  gap: 0.85rem;
+}
+
+.live-insight-card {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .045);
+}
+
+.live-insight-card p:not(.heading) {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.live-insight-card--primary {
+  border-color: rgba(56, 189, 248, .28);
+  background: linear-gradient(135deg, rgba(56, 189, 248, .11), rgba(255, 255, 255, .04));
+}
+
+.live-insight-card--recommendation {
+  border-color: rgba(245, 158, 11, .3);
+}
+
+.live-insight-card--config {
+  grid-column: 1 / -1;
+}
+
 .taxonomy-stack {
   display: grid;
   gap: 0.75rem;
@@ -1880,6 +1925,22 @@ body::after {
   min-width: 6rem;
 }
 
+.metric-progress--recall .progress::-webkit-progress-value {
+  background-color: #38bdf8;
+}
+
+.metric-progress--recall .progress::-moz-progress-bar {
+  background-color: #38bdf8;
+}
+
+.metric-progress--precision .progress::-webkit-progress-value {
+  background-color: #f59e0b;
+}
+
+.metric-progress--precision .progress::-moz-progress-bar {
+  background-color: #f59e0b;
+}
+
 .run-details-card--wide .insight-grid {
   grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
 }
@@ -2162,12 +2223,14 @@ body::after {
 @media screen and (max-width: 900px) {
   .launch-workbench-grid,
   .launch-mode-grid,
-  .experiment-status-grid {
+  .experiment-status-grid,
+  .live-insight-grid {
     grid-template-columns: 1fr;
   }
 
   .experiment-launch-header,
-  .experiment-status-header {
+  .experiment-status-header,
+  .live-insight-panel__header {
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -2324,6 +2387,60 @@ body::after {
 .report-card > * {
   position: relative;
   z-index: 1;
+}
+
+.markdown-report {
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.markdown-report p,
+.markdown-report ul,
+.markdown-report ol,
+.markdown-report pre {
+  margin: 0 0 1rem;
+}
+
+.markdown-report h3,
+.markdown-report h4,
+.markdown-report h5 {
+  margin: 1.15rem 0 .55rem;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.markdown-report ul,
+.markdown-report ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-report li + li {
+  margin-top: .35rem;
+}
+
+.markdown-report code {
+  color: #e0f2fe;
+  background: rgba(56, 189, 248, .12);
+  border: 1px solid rgba(56, 189, 248, .16);
+  border-radius: .35rem;
+  padding: .08rem .28rem;
+}
+
+.markdown-report pre {
+  max-height: 24rem;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: var(--radius-sm);
+  background: rgba(9, 12, 18, .72);
+}
+
+.markdown-report pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: pre;
 }
 
 .details-panel {
