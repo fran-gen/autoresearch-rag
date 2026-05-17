@@ -68,6 +68,43 @@
         });
       });
 
+      document.querySelectorAll('[data-command-center-layout]').forEach(function (layout) {
+        const closeButtons = layout.querySelectorAll('[data-command-center-close]');
+        const openButtons = layout.querySelectorAll('[data-command-center-open]');
+        const card = layout.querySelector('#command-center-card');
+
+        if (!closeButtons.length || !openButtons.length || !card) {
+          return;
+        }
+
+        const setOpen = function (isOpen) {
+          layout.classList.toggle('is-command-center-closed', !isOpen);
+          card.setAttribute('aria-hidden', String(!isOpen));
+          closeButtons.forEach(function (button) {
+            button.setAttribute('aria-expanded', String(isOpen));
+          });
+          openButtons.forEach(function (button) {
+            button.setAttribute('aria-expanded', String(isOpen));
+          });
+        };
+
+        closeButtons.forEach(function (button) {
+          button.addEventListener('click', function (event) {
+            event.preventDefault();
+            setOpen(false);
+          });
+        });
+
+        openButtons.forEach(function (button) {
+          button.addEventListener('click', function (event) {
+            event.preventDefault();
+            setOpen(true);
+          });
+        });
+
+        setOpen(false);
+      });
+
       const closeModal = function (modal) {
         modal.classList.remove('is-active');
         modal.setAttribute('aria-hidden', 'true');

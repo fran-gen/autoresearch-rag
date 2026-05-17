@@ -88,16 +88,34 @@
 
     <section class="section dashboard-shell">
       <div class="container is-fluid">
-        <div class="columns is-variable is-5">
-          <aside class="column is-4-tablet is-3-desktop">
-            <div class="card dashboard-sidebar">
+        <div class="columns is-variable is-5 dashboard-layout{% if current_endpoint != 'index' %} command-center-collapsible is-command-center-closed{% endif %}"{% if current_endpoint != 'index' %} data-command-center-layout{% endif %}>
+          {% if current_endpoint != 'index' %}
+            <button class="command-center-chip" type="button" data-command-center-open aria-controls="command-center-card" aria-expanded="false">
+              <span class="command-center-chip__dot {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% elif sidebar_status and sidebar_status.last_error %}is-danger{% endif %}" aria-hidden="true"></span>
+              <span class="command-center-chip__label">Command</span>
+              {% if sidebar_status and sidebar_status.last_error %}
+                <span class="command-center-chip__badge">!</span>
+              {% elif sidebar_status and sidebar_status.state == 'Running' %}
+                <span class="command-center-chip__badge">live</span>
+              {% else %}
+                <span class="command-center-chip__badge">{{ (sidebar_status.accepted if sidebar_status else 0) + (sidebar_status.rejected if sidebar_status else 0) }}</span>
+              {% endif %}
+            </button>
+          {% endif %}
+          <aside class="column is-4-tablet is-3-desktop command-center-aside">
+            <div class="card dashboard-sidebar" id="command-center-card" aria-hidden="{{ 'true' if current_endpoint != 'index' else 'false' }}">
               <div class="card-content">
                 <div class="sidebar-control-header">
                   <div>
                     <p class="menu-label mb-1">Command center</p>
                     <p class="sidebar-mini-copy">Live controls, run health, and latest lab updates.</p>
                   </div>
-                  <span class="sidebar-pulse {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% endif %}" aria-hidden="true"></span>
+                  <div class="sidebar-header-actions">
+                    <span class="sidebar-pulse {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% endif %}" aria-hidden="true"></span>
+                    {% if current_endpoint != 'index' %}
+                      <button class="command-center-close" type="button" data-command-center-close aria-controls="command-center-card" aria-expanded="false" aria-label="Close command center">x</button>
+                    {% endif %}
+                  </div>
                 </div>
 
                 <div class="sidebar-status-card">
