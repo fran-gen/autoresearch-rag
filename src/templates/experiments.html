@@ -235,7 +235,9 @@
       </div>
 
       <div class="score-signal-card score-signal-card--hero {% if best_delta is not none and best_delta >= 0 %}score-signal-card--up{% elif best_delta is not none %}score-signal-card--down{% endif %}">
-        <div class="score-orbit" aria-hidden="true"><span></span></div>
+        <div class="score-orbit{% if status and status.final_report %} score-orbit--complete{% endif %}" aria-hidden="true">
+          {% if status and status.final_report %}✓{% else %}<span></span>{% endif %}
+        </div>
         <div>
           <p class="heading label-with-help">Best score <span class="help-tooltip" tabindex="0" aria-label="Highest composite score found so far." data-tooltip="Highest composite score found so far across completed runs.">?</span></p>
           <p class="score-signal-card__value">{{ "%.4f"|format(best_score) if best_score is not none and best_score >= 0 else "—" }}</p>
