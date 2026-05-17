@@ -39,4 +39,17 @@ The project is built on a modern, scalable, and modular architecture, separating
 - **Bulma CSS**: A modern CSS framework used for clean, responsive, and maintainable styling without writing complex custom CSS.
 - **Chart.js**: Renders interactive, real-time charts and visual metrics for experiment leaderboards.
 
-[![Contributors](https://contrib.rocks/image?repo=fran-gen/autoresearch-rag)](https://github.com/fran-gen/autoresearch-rag/graphs/contributors)
+## Contributors
+
+<div align="center">
+  <a href="https://github.com/fran-gen">
+    <img src="https://github.com/fran-gen.png?size=80" width="80" alt="fran-gen" />
+  </a>
+  <a href="https://github.com/Bonhollow">
+    <img src="https://github.com/Bonhollow.png?size=80" width="80" alt="Bonhollow" />
+  </a>
+  <a href="https://github.com/DeanHnter">
+    <img src="https://github.com/DeanHnter.png?size=80" width="80" alt="DeanHnter" />
+  </a>
+</div>
+
