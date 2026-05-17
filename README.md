@@ -1,4 +1,7 @@
 
+<div align="center">
+  <img src="./static/logo.png" alt="Monotonic Labs Logo" width="100%">
+</div>
 
 # AutoRAG Research Lab
 
