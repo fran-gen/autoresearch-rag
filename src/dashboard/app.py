@@ -127,6 +127,7 @@ DEFAULT_REFRESH_SECONDS = 5
 MAX_RESEARCH_ITERATIONS = 10
 PUBLIC_ENDPOINTS = {"up", "index", "login", "logout", "register", "callback", "dashboard_logout", "static", "api_proxy"}
 AUTH_ENDPOINTS = {"login", "register", "callback", "logout"}
+BACKGROUND_ENDPOINTS = {"dashboard_status_snapshot"}
 _kinde_callback_url = (os.getenv("KINDE_CALLBACK_URL") or "").strip()
 _parsed_callback = urlparse(_kinde_callback_url) if _kinde_callback_url else None
 CANONICAL_AUTH_ORIGIN = (
@@ -263,7 +264,11 @@ def redirect_to_async_url(coro: Awaitable[str]) -> Response:
 def get_post_login_redirect_url() -> str:
     post_login_redirect = session.pop("post_login_redirect_url", None)
     if post_login_redirect:
-        return post_login_redirect.get("url", "/")
+        target = post_login_redirect.get("url", "/")
+        parsed = urlparse(target)
+        if parsed.path == url_for("dashboard_status_snapshot"):
+            return "/"
+        return target
     return "/"
 
 
@@ -419,6 +424,8 @@ def current_redirect_target() -> str:
 
 
 def remember_post_login_redirect() -> None:
+    if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return
     session["post_login_redirect_url"] = {"url": current_redirect_target()}
 
 
@@ -1970,6 +1977,9 @@ def protect_dashboard_routes():
     if kinde_oauth.is_authenticated():
         return None
 
+    if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"detail": "Authentication required."}), 401
+
     remember_post_login_redirect()
     return redirect(url_for("login"))
 
@@ -1996,6 +2006,20 @@ def dashboard_preferences():
     flash("Dashboard settings updated.", "success")
     next_url = (request.form.get("next") or "").strip() or url_for("index")
     return redirect(next_url)
+
+
+@app.route("/dashboard/status")
+def dashboard_status_snapshot():
+    live_mode, refresh_every = get_dashboard_preferences()
+    sidebar_status = get_sidebar_status_snapshot()
+    return jsonify(
+        {
+            "live_mode": live_mode,
+            "refresh_every": refresh_every,
+            "should_poll": live_mode or sidebar_status.get("state") in {"Running", "Updating"},
+            "sidebar_status": sidebar_status,
+        }
+    )
 
 
 @app.route("/dashboard/api-key", methods=["POST"])

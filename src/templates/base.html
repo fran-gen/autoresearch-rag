@@ -105,29 +105,147 @@
         setOpen(false);
       });
 
+      const appShell = document.querySelector('[data-dashboard-status-url]');
+      if (appShell) {
+        let dashboardStatusTimer = null;
+        let dashboardStatusInFlight = false;
+
+        const setText = function (selector, value) {
+          const node = document.querySelector(selector);
+          if (node) {
+            node.textContent = value;
+          }
+        };
+
+        const setSidebarStateClass = function (node, stateClass) {
+          if (!node) {
+            return;
+          }
+          Array.from(node.classList).forEach(function (className) {
+            if (className.startsWith('is-')) {
+              node.classList.remove(className);
+            }
+          });
+          node.classList.add('is-' + (stateClass || 'light'));
+          if (stateClass && stateClass !== 'success') {
+            node.classList.add('is-light');
+          }
+        };
+
+        const updateCommandCenter = function (payload) {
+          const status = payload && payload.sidebar_status ? payload.sidebar_status : {};
+          const state = status.state || 'Ready';
+          const stateClass = status.state_class || 'light';
+          const lastError = status.last_error || '';
+          const isRunning = state === 'Running';
+          const accepted = Number(status.accepted || 0);
+          const rejected = Number(status.rejected || 0);
+          const progress = Math.max(0, Math.min(100, Number(status.progress_pct || 0)));
+
+          setSidebarStateClass(document.querySelector('[data-sidebar-state]'), stateClass);
+          setText('[data-sidebar-state]', state);
+          setText('[data-sidebar-updated-at]', status.updated_at || '—');
+          setText('[data-sidebar-accepted]', String(accepted));
+          setText('[data-sidebar-rejected]', String(rejected));
+          setText('[data-sidebar-best-score]', typeof status.best_score === 'number' ? status.best_score.toFixed(3) : '—');
+          setText('[data-sidebar-message]', lastError || status.message || 'No dashboard updates yet.');
+
+          const phase = document.querySelector('[data-sidebar-phase]');
+          if (phase) {
+            const phaseText = status.phase && state !== 'Ready' ? status.phase : '';
+            phase.textContent = phaseText;
+            phase.hidden = !phaseText;
+          }
+
+          const progressBar = document.querySelector('[data-sidebar-progress]');
+          if (progressBar) {
+            progressBar.style.width = progress + '%';
+          }
+
+          const pulse = document.querySelector('[data-sidebar-pulse]');
+          if (pulse) {
+            pulse.classList.toggle('is-running', isRunning);
+          }
+
+          const updateItem = document.querySelector('[data-sidebar-update-item]');
+          if (updateItem) {
+            updateItem.classList.toggle('is-live', isRunning && !lastError);
+            updateItem.classList.toggle('is-danger', Boolean(lastError));
+          }
+
+          const chipDot = document.querySelector('[data-command-chip-dot]');
+          if (chipDot) {
+            chipDot.classList.toggle('is-running', isRunning);
+            chipDot.classList.toggle('is-danger', Boolean(lastError));
+          }
+
+          setText('[data-command-chip-badge]', lastError ? '!' : isRunning ? 'live' : String(accepted + rejected));
+          appShell.dataset.dashboardRefreshEvery = String(payload.refresh_every || appShell.dataset.dashboardRefreshEvery || 5);
+          appShell.dataset.dashboardLiveMode = payload.live_mode ? '1' : '0';
+        };
+
+        const scheduleDashboardStatus = function () {
+          if (dashboardStatusTimer) {
+            clearTimeout(dashboardStatusTimer);
+          }
+          const refreshEvery = Math.max(3, parseInt(appShell.dataset.dashboardRefreshEvery || '5', 10) || 5);
+          dashboardStatusTimer = setTimeout(fetchDashboardStatus, refreshEvery * 1000);
+        };
+
+        const fetchDashboardStatus = function () {
+          if (dashboardStatusInFlight || document.hidden) {
+            scheduleDashboardStatus();
+            return;
+          }
+
+          dashboardStatusInFlight = true;
+          const url = new URL(appShell.dataset.dashboardStatusUrl, window.location.origin);
+          url.searchParams.set('_', String(Date.now()));
+          fetch(url.toString(), {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            cache: 'no-store',
+            credentials: 'same-origin',
+          })
+            .then(function (response) {
+              if (!response.ok) {
+                throw new Error('Dashboard status refresh failed');
+              }
+              return response.json();
+            })
+            .then(updateCommandCenter)
+            .catch(function () {})
+            .finally(function () {
+              dashboardStatusInFlight = false;
+              scheduleDashboardStatus();
+            });
+        };
+
+        scheduleDashboardStatus();
+      }
+
       const closeModal = function (modal) {
         modal.classList.remove('is-active');
         modal.setAttribute('aria-hidden', 'true');
       };
 
-      document.querySelectorAll('.js-modal-trigger').forEach(function (trigger) {
-        trigger.addEventListener('click', function () {
+      document.addEventListener('click', function (event) {
+        const trigger = event.target.closest('.js-modal-trigger');
+        if (trigger) {
           const modal = document.getElementById(trigger.dataset.target);
-          if (!modal) {
-            return;
+          if (modal) {
+            modal.classList.add('is-active');
+            modal.setAttribute('aria-hidden', 'false');
           }
-          modal.classList.add('is-active');
-          modal.setAttribute('aria-hidden', 'false');
-        });
-      });
+          return;
+        }
 
-      document.querySelectorAll('.modal .js-modal-close').forEach(function (close) {
-        close.addEventListener('click', function () {
+        const close = event.target.closest('.modal .js-modal-close');
+        if (close) {
           const modal = close.closest('.modal');
           if (modal) {
             closeModal(modal);
           }
-        });
+        }
       });
 
       document.addEventListener('keydown', function (event) {

@@ -908,6 +908,15 @@ body::after {
   color: var(--text-muted-dark) !important;
 }
 
+.experiments-live-region {
+  transition: opacity .18s ease, filter .18s ease;
+}
+
+.experiments-live-region.is-live-updating {
+  opacity: .72;
+  filter: saturate(.92);
+}
+
 /* ── Bulma .box — dark cards ──────────────────────────────────────── */
 
 .box {

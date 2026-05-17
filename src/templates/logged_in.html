@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block body %}
-  <div class="app-shell">
+  <div class="app-shell" data-dashboard-status-url="{{ url_for('dashboard_status_snapshot') }}" data-dashboard-refresh-every="{{ dashboard_refresh_every }}" data-dashboard-live-mode="{{ 1 if dashboard_live_mode else 0 }}">
     <nav class="navbar app-navbar" role="navigation" aria-label="main navigation">
       <div class="app-navbar__inner">
         <div class="navbar-brand">
@@ -91,14 +91,14 @@
         <div class="columns is-variable is-5 dashboard-layout{% if current_endpoint != 'index' %} command-center-collapsible is-command-center-closed{% endif %}"{% if current_endpoint != 'index' %} data-command-center-layout{% endif %}>
           {% if current_endpoint != 'index' %}
             <button class="command-center-chip" type="button" data-command-center-open aria-controls="command-center-card" aria-expanded="false">
-              <span class="command-center-chip__dot {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% elif sidebar_status and sidebar_status.last_error %}is-danger{% endif %}" aria-hidden="true"></span>
+              <span class="command-center-chip__dot {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% elif sidebar_status and sidebar_status.last_error %}is-danger{% endif %}" data-command-chip-dot aria-hidden="true"></span>
               <span class="command-center-chip__label">Command</span>
               {% if sidebar_status and sidebar_status.last_error %}
-                <span class="command-center-chip__badge">!</span>
+                <span class="command-center-chip__badge" data-command-chip-badge>!</span>
               {% elif sidebar_status and sidebar_status.state == 'Running' %}
-                <span class="command-center-chip__badge">live</span>
+                <span class="command-center-chip__badge" data-command-chip-badge>live</span>
               {% else %}
-                <span class="command-center-chip__badge">{{ (sidebar_status.accepted if sidebar_status else 0) + (sidebar_status.rejected if sidebar_status else 0) }}</span>
+                <span class="command-center-chip__badge" data-command-chip-badge>{{ (sidebar_status.accepted if sidebar_status else 0) + (sidebar_status.rejected if sidebar_status else 0) }}</span>
               {% endif %}
             </button>
           {% endif %}
@@ -111,7 +111,7 @@
                     <p class="sidebar-mini-copy">Live controls, run health, and latest lab updates.</p>
                   </div>
                   <div class="sidebar-header-actions">
-                    <span class="sidebar-pulse {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% endif %}" aria-hidden="true"></span>
+                    <span class="sidebar-pulse {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% endif %}" data-sidebar-pulse aria-hidden="true"></span>
                     {% if current_endpoint != 'index' %}
                       <button class="command-center-close" type="button" data-command-center-close aria-controls="command-center-card" aria-expanded="false" aria-label="Close command center">x</button>
                     {% endif %}
@@ -120,26 +120,28 @@
 
                 <div class="sidebar-status-card">
                   <div class="sidebar-status-card__top">
-                    <span class="tag is-{{ sidebar_status.state_class if sidebar_status else 'light' }} {% if sidebar_status and sidebar_status.state_class != 'success' %}is-light{% endif %}">{{ sidebar_status.state if sidebar_status else 'Ready' }}</span>
-                    <span class="sidebar-time">{{ sidebar_status.updated_at if sidebar_status and sidebar_status.updated_at else '—' }}</span>
+                    <span class="tag is-{{ sidebar_status.state_class if sidebar_status else 'light' }} {% if sidebar_status and sidebar_status.state_class != 'success' %}is-light{% endif %}" data-sidebar-state>{{ sidebar_status.state if sidebar_status else 'Ready' }}</span>
+                    <span class="sidebar-time" data-sidebar-updated-at>{{ sidebar_status.updated_at if sidebar_status and sidebar_status.updated_at else '—' }}</span>
                   </div>
                   {% if sidebar_status and sidebar_status.state != 'Ready' and sidebar_status.phase %}
-                    <p class="sidebar-status-card__phase">{{ sidebar_status.phase }}</p>
+                    <p class="sidebar-status-card__phase" data-sidebar-phase>{{ sidebar_status.phase }}</p>
+                  {% else %}
+                    <p class="sidebar-status-card__phase" data-sidebar-phase hidden></p>
                   {% endif %}
                   <div class="sidebar-progress-track" aria-label="Research progress">
-                    <span style="width: {{ sidebar_status.progress_pct if sidebar_status else 0 }}%"></span>
+                    <span data-sidebar-progress style="width: {{ sidebar_status.progress_pct if sidebar_status else 0 }}%"></span>
                   </div>
                   <div class="sidebar-stat-grid">
                     <div>
-                      <span>{{ sidebar_status.accepted if sidebar_status else 0 }}</span>
+                      <span data-sidebar-accepted>{{ sidebar_status.accepted if sidebar_status else 0 }}</span>
                       <small>accepted</small>
                     </div>
                     <div>
-                      <span>{{ sidebar_status.rejected if sidebar_status else 0 }}</span>
+                      <span data-sidebar-rejected>{{ sidebar_status.rejected if sidebar_status else 0 }}</span>
                       <small>rejected</small>
                     </div>
                     <div>
-                      <span>{% if sidebar_status and sidebar_status.best_score is not none %}{{ "%.3f"|format(sidebar_status.best_score) }}{% else %}—{% endif %}</span>
+                      <span data-sidebar-best-score>{% if sidebar_status and sidebar_status.best_score is not none %}{{ "%.3f"|format(sidebar_status.best_score) }}{% else %}—{% endif %}</span>
                       <small>best</small>
                     </div>
                   </div>
@@ -175,9 +177,9 @@
 
                 <div class="sidebar-update-feed">
                   <p class="menu-label mb-2">Latest update</p>
-                  <div class="sidebar-update-item {% if sidebar_status and sidebar_status.last_error %}is-danger{% elif sidebar_status and sidebar_status.state == 'Running' %}is-live{% endif %}">
+                  <div class="sidebar-update-item {% if sidebar_status and sidebar_status.last_error %}is-danger{% elif sidebar_status and sidebar_status.state == 'Running' %}is-live{% endif %}" data-sidebar-update-item>
                     <span class="sidebar-update-dot"></span>
-                    <p>{{ sidebar_status.last_error if sidebar_status and sidebar_status.last_error else sidebar_status.message if sidebar_status and sidebar_status.message else 'No dashboard updates yet.' }}</p>
+                    <p data-sidebar-message>{{ sidebar_status.last_error if sidebar_status and sidebar_status.last_error else sidebar_status.message if sidebar_status and sidebar_status.message else 'No dashboard updates yet.' }}</p>
                   </div>
                 </div>
 
