@@ -1600,7 +1600,13 @@ def build_score_history_rows(score_history: list[dict] | None, initial_baseline:
     for entry in history:
         score = to_float(entry.get("score"))
         baseline = to_float(entry.get("baseline"))
-        if score is not None:
+        status = str(entry.get("status") or "completed")
+        reason = str(entry.get("reason") or "").strip()
+        failed_before_metrics = (
+            status == "failed"
+            or reason.lower().startswith("rejected: experiment failed before producing")
+        )
+        if score is not None and not failed_before_metrics:
             numeric_values.append(score)
         if baseline is not None:
             numeric_values.append(baseline)
@@ -1617,19 +1623,28 @@ def build_score_history_rows(score_history: list[dict] | None, initial_baseline:
         score = to_float(entry.get("score"))
         baseline = to_float(entry.get("baseline"))
         accepted = bool(entry.get("accepted"))
+        status = str(entry.get("status") or "completed")
         reason = str(entry.get("reason") or "").strip()
+        failed_before_metrics = (
+            status == "failed"
+            or reason.lower().startswith("rejected: experiment failed before producing")
+        )
+        has_score = score is not None and not failed_before_metrics
         validation_delta = to_float(entry.get("validation_delta"))
         rows.append(
             {
                 "iteration": iteration,
                 "label": f"Iter {iteration}",
                 "score": score,
+                "plot_score": score if has_score else 0.0,
+                "has_score": has_score,
+                "failed": failed_before_metrics,
                 "baseline": baseline,
                 "validation_delta": validation_delta,
                 "accepted": accepted,
                 "result_label": "Accepted" if accepted else "Rejected",
                 "reason": reason,
-                "score_pct": max(0.0, ((score or 0.0) / max_value) * 100),
+                "score_pct": max(0.0, ((score or 0.0) / max_value) * 100) if has_score else 0.0,
                 "baseline_pct": max(0.0, ((baseline or 0.0) / max_value) * 100),
                 "initial_baseline_pct": baseline_pct,
             }

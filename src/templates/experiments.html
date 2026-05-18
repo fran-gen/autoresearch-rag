@@ -301,6 +301,22 @@
       {% if has_scores %}
         <p class="is-size-7 has-text-grey mt-3">Baseline reference: {{ "%.4f"|format(initial_baseline) }}</p>
       {% endif %}
+      {% set issue_rows = namespace(has=false) %}
+      {% for row in score_history_rows %}
+        {% if row.failed and row.reason %}
+          {% set issue_rows.has = true %}
+        {% endif %}
+      {% endfor %}
+      {% if issue_rows.has %}
+        <div class="notification is-danger is-light mt-3">
+          <p class="has-text-weight-semibold mb-2">Failed iterations</p>
+          {% for row in score_history_rows %}
+            {% if row.failed and row.reason %}
+              <p class="mb-2"><span class="tag is-danger is-light mr-2">{{ row.label }}</span>{{ row.reason }}</p>
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% endif %}
     {% elif status and status.running %}
       <div class="notification is-light">Experiment is running. Scores will appear after the first iteration completes.</div>
     {% else %}
@@ -712,7 +728,7 @@
 
         var rows = {{ score_history_rows | tojson }};
         var baselineValue = {{ initial_baseline | tojson }};
-        var scores = rows.map(function (r) { return r.score; });
+        var scores = rows.map(function (r) { return r.has_score ? r.score : r.plot_score; });
         var barColors = rows.map(function (r) {
           return r.accepted ? 'rgba(34, 197, 94, 0.85)' : 'rgba(239, 68, 68, 0.85)';
         });
@@ -720,6 +736,9 @@
           return r.accepted ? 'rgba(34, 197, 94, 1)' : 'rgba(239, 68, 68, 1)';
         });
         var formatScore = function (v) { return typeof v === 'number' ? v.toFixed(4) : '—'; };
+        var formatRowScore = function (r) {
+          return r && r.has_score && typeof r.score === 'number' ? r.score.toFixed(4) : 'No valid score';
+        };
 
         new Chart(canvas, {
           type: 'bar',
@@ -731,7 +750,7 @@
                 data: scores,
                 backgroundColor: barColors,
                 borderColor: borderColors,
-                borderWidth: 1, borderRadius: 8, maxBarThickness: 48,
+                borderWidth: 1, borderRadius: 8, maxBarThickness: 48, minBarLength: 8,
               },
             ],
           },
@@ -753,7 +772,9 @@
               },
               tooltip: {
                 callbacks: {
-                  label: function (ctx) { return 'Score: ' + formatScore(ctx.parsed.y); },
+                  label: function (ctx) {
+                    return 'Score: ' + formatRowScore(rows[ctx.dataIndex]);
+                  },
                   afterBody: function (items) {
                     var r = rows[items[0].dataIndex];
                     var lines = ['Incumbent: ' + formatScore(r.baseline)];
