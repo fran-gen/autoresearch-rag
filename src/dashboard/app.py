@@ -376,6 +376,44 @@ def get_authorized_data():
     }
 
 
+def get_authenticated_user_id() -> str:
+    if not kinde_oauth.is_authenticated():
+        return ""
+
+    try:
+        user = kinde_oauth.get_user_info()
+    except Exception as exc:
+        logger.warning("Failed to load Kinde user id: %s", exc)
+        return ""
+
+    return str((user or {}).get("id") or "").strip()
+
+
+def clear_runtime_google_api_key() -> None:
+    session.pop("runtime_google_api_key", None)
+    session.pop("runtime_google_api_key_user_id", None)
+
+
+def get_session_runtime_google_api_key() -> str:
+    api_key = str(session.get("runtime_google_api_key") or "").strip()
+    if not api_key:
+        return ""
+
+    owner_user_id = str(session.get("runtime_google_api_key_user_id") or "").strip()
+    if not owner_user_id:
+        clear_runtime_google_api_key()
+        return ""
+
+    current_user_id = get_authenticated_user_id()
+    if not current_user_id:
+        return ""
+    if owner_user_id != current_user_id:
+        clear_runtime_google_api_key()
+        return ""
+
+    return api_key
+
+
 def get_user_initials(user_data: dict[str, str | None]) -> str:
     first = (user_data.get("user_given_name") or "")[:1]
     last = (user_data.get("user_family_name") or "")[:1]
@@ -1835,7 +1873,7 @@ def build_leaderboard_rows(board: list[dict] | None) -> list[dict[str, object]]:
 
 
 def has_google_api_key_for_session() -> bool:
-    if bool(session.get("runtime_google_api_key")):
+    if bool(get_session_runtime_google_api_key()):
         return True
     return bool(get_settings().google_api_key.strip())
 
@@ -1846,7 +1884,7 @@ def api_request(method: str, path: str, **kwargs):
     headers = dict(kwargs.pop("headers", {}) or {})
     runtime_api_key = ""
     if has_request_context():
-        runtime_api_key = str(session.get("runtime_google_api_key") or "").strip()
+        runtime_api_key = get_session_runtime_google_api_key()
     if runtime_api_key:
         headers["X-Google-Api-Key"] = runtime_api_key
     if headers:
@@ -2177,11 +2215,17 @@ def dashboard_api_key():
     api_key = (request.form.get("api_key") or "").strip()
     next_url = (request.form.get("next") or "").strip() or url_for("index")
     if not api_key:
-        session.pop("runtime_google_api_key", None)
+        clear_runtime_google_api_key()
         flash("API key cleared for this dashboard session. The default server key will be used.", "success")
         return redirect(next_url)
 
+    user_id = get_authenticated_user_id()
+    if not user_id:
+        flash("Could not apply API key because the current user could not be verified.", "error")
+        return redirect(next_url)
+
     session["runtime_google_api_key"] = api_key
+    session["runtime_google_api_key_user_id"] = user_id
     flash("API key applied for this dashboard session.", "success")
     return redirect(next_url)
 
