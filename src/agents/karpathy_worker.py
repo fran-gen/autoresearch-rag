@@ -232,6 +232,26 @@ def _copy_hf_cache_if_needed(container, cache_mounted: bool) -> None:
     container.put_archive("/app", _tar_directory_bytes(source, arcname=".hf_cache"))
 
 
+def _sandbox_thread_env(thread_count: int) -> dict[str, str]:
+    threads = str(max(1, thread_count))
+    return {
+        "OMP_NUM_THREADS": threads,
+        "MKL_NUM_THREADS": threads,
+        "OPENBLAS_NUM_THREADS": threads,
+        "NUMEXPR_NUM_THREADS": threads,
+        "VECLIB_MAXIMUM_THREADS": threads,
+        "TOKENIZERS_PARALLELISM": "false",
+    }
+
+
+def _container_logs_tail(container, limit: int = 2000) -> str:
+    try:
+        logs = container.logs(stdout=True, stderr=True, tail=80)
+        return logs.decode("utf-8", errors="replace")[-limit:]
+    except Exception as exc:
+        return f"<unable to read sandbox logs: {exc}>"
+
+
 def _run_benchmark_in_docker(
     state: ResearchLabState,
     pipeline_code: str,
@@ -270,26 +290,32 @@ def _run_benchmark_in_docker(
         "HF_HUB_CACHE": f"{SANDBOX_HF_HOME}/hub",
         "TRANSFORMERS_CACHE": SANDBOX_HF_HOME,
     }
+    environment.update(_sandbox_thread_env(settings.karpathy_sandbox_threads))
     if settings.karpathy_sandbox_network_disabled:
         environment["HF_HUB_OFFLINE"] = "1"
         environment["TRANSFORMERS_OFFLINE"] = "1"
 
     try:
         try:
-            container = client.containers.create(
-                settings.karpathy_sandbox_image,
-                command=[
+            create_kwargs = {
+                "image": settings.karpathy_sandbox_image,
+                "command": [
                     "python",
                     "-m",
                     "src.benchmark.karpathy_sandbox_runner",
                     "/tmp/karpathy_state.json",
                 ],
-                working_dir="/app",
-                environment=environment,
-                mem_limit=settings.karpathy_sandbox_memory,
-                network_disabled=settings.karpathy_sandbox_network_disabled,
-                volumes=volumes or None,
-            )
+                "working_dir": "/app",
+                "environment": environment,
+                "mem_limit": settings.karpathy_sandbox_memory,
+                "network_disabled": settings.karpathy_sandbox_network_disabled,
+                "volumes": volumes or None,
+            }
+            if settings.karpathy_sandbox_cpus > 0:
+                create_kwargs["nano_cpus"] = int(
+                    settings.karpathy_sandbox_cpus * 1_000_000_000
+                )
+            container = client.containers.create(**create_kwargs)
         except ImageNotFound as exc:
             raise RuntimeError(
                 f"Sandbox image '{settings.karpathy_sandbox_image}' was not found. "
@@ -311,7 +337,19 @@ def _run_benchmark_in_docker(
         )
 
         container.start()
-        exit_result = container.wait(timeout=settings.karpathy_sandbox_timeout_seconds)
+        try:
+            exit_result = container.wait(timeout=settings.karpathy_sandbox_timeout_seconds)
+        except Exception as exc:
+            logs = _container_logs_tail(container)
+            raise RuntimeError(
+                "Sandbox exceeded "
+                f"KARPATHY_SANDBOX_TIMEOUT_SECONDS="
+                f"{settings.karpathy_sandbox_timeout_seconds}s while waiting for "
+                "benchmark results. This usually means the candidate pipeline was "
+                "CPU-bound, often from cross-encoder reranking too many candidates "
+                "or running the full benchmark. Last logs: "
+                f"{logs}"
+            ) from exc
         logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
         status_code = exit_result.get("StatusCode", 1) if isinstance(exit_result, dict) else 1
         if status_code != 0:
@@ -449,6 +487,7 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
     best_score = -1.0
     best_candidate_code = proposed_code
     best_candidate_config = state.get("proposed_config")
+    candidate_failures: list[str] = []
 
     for i, cand in enumerate(all_candidates):
         cand_code = cand["code"]
@@ -460,8 +499,12 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
             )
         except Exception as exc:
             logger.warning("Candidate %d/%d benchmark failed: %s", i + 1, len(all_candidates), exc)
+            candidate_failures.append(f"Candidate {i + 1}/{len(all_candidates)} failed: {exc}")
             continue
         if m.total_questions <= 0 or not qr:
+            candidate_failures.append(
+                f"Candidate {i + 1}/{len(all_candidates)} returned no benchmark results."
+            )
             continue
         score = calc_score(m)
         logger.info(
@@ -476,10 +519,13 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
             best_candidate_config = cand.get("config")
 
     if best_qr is None or best_metrics is None:
+        failure_reason = "All candidates failed benchmark evaluation."
+        if candidate_failures:
+            failure_reason = f"{failure_reason} {' | '.join(candidate_failures[:3])}"
         result = _failed_result(
             state,
             experiment.id,
-            "All candidates failed benchmark evaluation.",
+            failure_reason,
         )
         state["results"] = state["results"] + [result]
         state["completed_experiments"] = state["completed_experiments"] + [experiment]

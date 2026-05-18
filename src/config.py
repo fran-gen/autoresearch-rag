@@ -51,6 +51,8 @@ class Settings(BaseSettings):
         alias="KARPATHY_SANDBOX_TIMEOUT_SECONDS",
     )
     karpathy_sandbox_memory: str = Field(default="3g", alias="KARPATHY_SANDBOX_MEMORY")
+    karpathy_sandbox_cpus: float = Field(default=2.0, alias="KARPATHY_SANDBOX_CPUS")
+    karpathy_sandbox_threads: int = Field(default=2, alias="KARPATHY_SANDBOX_THREADS")
     karpathy_sandbox_network_disabled: bool = Field(
         default=True,
         alias="KARPATHY_SANDBOX_NETWORK_DISABLED",
@@ -70,6 +72,18 @@ class Settings(BaseSettings):
     karpathy_num_candidates: int = Field(
         default=1,
         alias="KARPATHY_NUM_CANDIDATES",
+    )
+    karpathy_retrieve_top_k_cap: int = Field(
+        default=24,
+        alias="KARPATHY_RETRIEVE_TOP_K_CAP",
+    )
+    karpathy_rerank_candidate_cap: int = Field(
+        default=24,
+        alias="KARPATHY_RERANK_CANDIDATE_CAP",
+    )
+    karpathy_auto_reset_focus_after_accept: bool = Field(
+        default=False,
+        alias="KARPATHY_AUTO_RESET_FOCUS_AFTER_ACCEPT",
     )
 
     @property
