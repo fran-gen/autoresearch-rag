@@ -38,6 +38,9 @@ class Settings(BaseSettings):
         alias="EXPERIMENT_DB_PATH",
     )
     default_top_k: int = Field(default=8, alias="DEFAULT_TOP_K")
+    model_inference_threads: int = Field(default=1, alias="MODEL_INFERENCE_THREADS")
+    retrieve_top_k_cap: int = Field(default=24, alias="RETRIEVE_TOP_K_CAP")
+    rerank_candidate_cap: int = Field(default=24, alias="RERANK_CANDIDATE_CAP")
 
     # Karpathy mode: when False (default), only `git add` pipeline.py after a run; when True, also commit.
     karpathy_pipeline_commit: bool = Field(default=False, alias="KARPATHY_PIPELINE_COMMIT")
@@ -51,6 +54,8 @@ class Settings(BaseSettings):
         alias="KARPATHY_SANDBOX_TIMEOUT_SECONDS",
     )
     karpathy_sandbox_memory: str = Field(default="3g", alias="KARPATHY_SANDBOX_MEMORY")
+    karpathy_sandbox_cpus: float = Field(default=1.0, alias="KARPATHY_SANDBOX_CPUS")
+    karpathy_sandbox_threads: int = Field(default=1, alias="KARPATHY_SANDBOX_THREADS")
     karpathy_sandbox_network_disabled: bool = Field(
         default=True,
         alias="KARPATHY_SANDBOX_NETWORK_DISABLED",
