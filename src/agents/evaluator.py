@@ -132,6 +132,13 @@ def _format_signed_score(value: float | None) -> str:
     return f"{value:+.4f}" if isinstance(value, (int, float)) else "n/a"
 
 
+def _acceptance_delta_threshold(state: ResearchLabState) -> float:
+    """Require real lift on the first run, then accept non-regressions."""
+    if state.get("iteration", 0) >= 1:
+        return 0.0
+    return state["min_improvement_delta"]
+
+
 async def _generate_final_report(state: ResearchLabState) -> str:
     """Ask the LLM for a synthesis of the research session."""
     settings = get_settings()
@@ -267,7 +274,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         if latest.baseline_score is not None
         else state["best_score"]
     )
-    min_delta = state["min_improvement_delta"]
+    min_delta = _acceptance_delta_threshold(state)
     delta = (
         latest.delta_vs_baseline
         if latest.delta_vs_baseline is not None
@@ -293,7 +300,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         state["accepted_experiments"] += 1
         latest.accepted = True
         verdict_reason = (
-            f"Accepted: score improved to {latest.composite_score:.4f} "
+            f"Accepted: score reached {latest.composite_score:.4f} "
             f"(baseline {current_best:.4f}, delta {delta:.4f})."
         )
         latest.improvement_summary = verdict_reason
