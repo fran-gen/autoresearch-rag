@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # Karpathy mode: when False (default), only `git add` pipeline.py after a run; when True, also commit.
     karpathy_pipeline_commit: bool = Field(default=False, alias="KARPATHY_PIPELINE_COMMIT")
     karpathy_sandbox_enabled: bool = Field(default=True, alias="KARPATHY_SANDBOX_ENABLED")
+    karpathy_sandbox_fallback_to_process: bool = Field(
+        default=True,
+        alias="KARPATHY_SANDBOX_FALLBACK_TO_PROCESS",
+    )
     karpathy_sandbox_image: str = Field(
         default="hackathon-lab-app:latest",
         alias="KARPATHY_SANDBOX_IMAGE",
@@ -59,6 +63,11 @@ class Settings(BaseSettings):
     karpathy_sandbox_network_disabled: bool = Field(
         default=True,
         alias="KARPATHY_SANDBOX_NETWORK_DISABLED",
+    )
+    karpathy_max_questions: int = Field(default=24, alias="KARPATHY_MAX_QUESTIONS")
+    karpathy_retrieve_calls_per_question: int = Field(
+        default=4,
+        alias="KARPATHY_RETRIEVE_CALLS_PER_QUESTION",
     )
     karpathy_hf_cache_host_path: str = Field(
         default="",

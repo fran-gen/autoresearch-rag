@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import importlib.util
 import io
 import json
 import logging
+import re
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
 
+from src.agents.karpathy_validation import validate_karpathy_code
 from src.agents.state import ResearchLabState
 from src.benchmark.karpathy_sandbox import run_karpathy_benchmark
 from src.config import get_settings
@@ -31,81 +32,10 @@ SANDBOX_HF_HOME = "/app/.hf_cache"
 SANDBOX_DATA_ROOT = "/app/data"
 SANDBOX_QDRANT_PATH = "/app/index/qdrant_data"
 
-ALLOWED_IMPORTS = frozenset({
-    "src.retrieval.base",
-    "src.benchmark.loader",
-    "re",
-    "math",
-    "statistics",
-    "collections",
-    "itertools",
-    "functools",
-    "__future__",
-})
-
-FORBIDDEN_MODULES = frozenset({
-    "os", "sys", "subprocess", "socket", "requests",
-    "urllib", "pathlib", "shutil", "http", "ftplib",
-    "smtplib", "ctypes", "multiprocessing",
-})
-
-
-def _validate_imports(code: str) -> str | None:
-    """Check that only allowed modules are imported. Returns error message or None."""
-    try:
-        tree = ast.parse(code)
-    except SyntaxError as e:
-        return f"SyntaxError: {e}"
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root_module = alias.name.split(".")[0]
-                if root_module in FORBIDDEN_MODULES:
-                    return f"Forbidden import: {alias.name}"
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                root_module = node.module.split(".")[0]
-                if root_module in FORBIDDEN_MODULES:
-                    return f"Forbidden import from: {node.module}"
-    return None
-
-
-def _validate_signature(code: str) -> str | None:
-    """Verify the retrieve() function exists with correct parameters."""
-    try:
-        tree = ast.parse(code)
-    except SyntaxError as e:
-        return f"SyntaxError: {e}"
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "retrieve":
-            arg_names = [arg.arg for arg in node.args.args]
-            if arg_names == ["question", "retriever", "top_k"]:
-                return None
-            return f"Wrong signature: retrieve({', '.join(arg_names)}). Expected (question, retriever, top_k)"
-    return "Missing retrieve() function"
-
 
 def _validate_code(code: str) -> str | None:
     """Run all validation checks. Returns error message or None on success."""
-    # 1. Syntax check
-    try:
-        compile(code, "pipeline.py", "exec")
-    except SyntaxError as e:
-        return f"SyntaxError: {e}"
-
-    # 2. Import check
-    err = _validate_imports(code)
-    if err:
-        return err
-
-    # 3. Signature check
-    err = _validate_signature(code)
-    if err:
-        return err
-
-    return None
+    return validate_karpathy_code(code)
 
 
 def _load_retrieve_function_from_code(code: str):
@@ -244,12 +174,38 @@ def _sandbox_thread_env(thread_count: int) -> dict[str, str]:
     return _model_thread_env(thread_count)
 
 
+def _clean_log_excerpt(text: str, limit: int = 1200) -> str:
+    text = text.replace("\r", "\n")
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    excerpt = " | ".join(lines)
+    excerpt = re.sub(r"\s+", " ", excerpt).strip()
+    return excerpt[-limit:] if len(excerpt) > limit else excerpt
+
+
 def _container_logs_tail(container, limit: int = 2000) -> str:
     try:
         logs = container.logs(stdout=True, stderr=True, tail=80)
-        return logs.decode("utf-8", errors="replace")[-limit:]
+        return _clean_log_excerpt(logs.decode("utf-8", errors="replace"), limit=limit)
     except Exception as exc:
         return f"<unable to read sandbox logs: {exc}>"
+
+
+def _is_docker_unavailable_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "docker sdk is not installed" in text:
+        return True
+    if "error while fetching server api version" in text:
+        return True
+    if "docker daemon" in text and "permission denied" in text:
+        return True
+
+    socket_markers = (
+        "no such file or directory",
+        "connection aborted",
+        "permission denied",
+    )
+    return "docker sandbox failed" in text and any(marker in text for marker in socket_markers)
 
 
 def _run_benchmark_in_docker(
@@ -264,7 +220,7 @@ def _run_benchmark_in_docker(
         raise RuntimeError("Docker SDK is not installed. Install the 'docker' package.") from exc
 
     payload = _sandbox_payload(state)
-    client = docker.from_env()
+    client = None
     container = None
     volumes = {}
     hf_cache_host_path = settings.karpathy_hf_cache_host_path.strip()
@@ -296,6 +252,7 @@ def _run_benchmark_in_docker(
         environment["TRANSFORMERS_OFFLINE"] = "1"
 
     try:
+        client = docker.from_env()
         try:
             create_kwargs = {
                 "image": settings.karpathy_sandbox_image,
@@ -340,28 +297,29 @@ def _run_benchmark_in_docker(
         except Exception as exc:
             logs = _container_logs_tail(container)
             raise RuntimeError(
-                "Sandbox exceeded "
-                f"KARPATHY_SANDBOX_TIMEOUT_SECONDS={settings.karpathy_sandbox_timeout_seconds}s. "
-                "The candidate may be CPU-bound. Last logs: "
-                f"{logs}"
+                "Sandbox timed out after "
+                f"{settings.karpathy_sandbox_timeout_seconds}s and was stopped. "
+                "The candidate may be too slow or may call retrieve too many times. "
+                f"Last logs: {logs or 'none'}"
             ) from exc
         logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
+        clean_logs = _clean_log_excerpt(logs)
         status_code = exit_result.get("StatusCode", 1) if isinstance(exit_result, dict) else 1
         if status_code != 0:
             if status_code == 137:
                 raise RuntimeError(
-                    "Sandbox exited with 137, which usually means Docker killed it for "
-                    f"memory pressure. Current KARPATHY_SANDBOX_MEMORY="
-                    f"{settings.karpathy_sandbox_memory}. Last logs: {logs[-1200:]}"
+                    "Sandbox exited with 137 (killed by Docker, commonly timeout or "
+                    f"memory pressure). Current KARPATHY_SANDBOX_MEMORY="
+                    f"{settings.karpathy_sandbox_memory}. Last logs: {clean_logs or 'none'}"
                 )
-            raise RuntimeError(f"Sandbox exited with {status_code}: {logs[-1200:]}")
+            raise RuntimeError(f"Sandbox exited with {status_code}: {clean_logs or 'no logs'}")
 
         result_line = next(
             (line[len(RESULT_PREFIX):] for line in reversed(logs.splitlines()) if line.startswith(RESULT_PREFIX)),
             "",
         )
         if not result_line:
-            raise RuntimeError(f"Sandbox did not emit a result payload: {logs[-1200:]}")
+            raise RuntimeError(f"Sandbox did not emit a result payload: {clean_logs or 'no logs'}")
         result_payload = json.loads(result_line)
         question_results = [
             QuestionResult.model_validate(item)
@@ -399,7 +357,20 @@ def _run_benchmark_for_code(
 ) -> tuple[list[QuestionResult], BenchmarkMetrics]:
     settings = get_settings()
     if settings.karpathy_sandbox_enabled:
-        return _run_benchmark_in_docker(state, pipeline_code)
+        try:
+            return _run_benchmark_in_docker(state, pipeline_code)
+        except RuntimeError as exc:
+            if (
+                settings.karpathy_sandbox_fallback_to_process
+                and _is_docker_unavailable_error(exc)
+            ):
+                logger.warning(
+                    "Docker sandbox unavailable; falling back to in-process Karpathy "
+                    "benchmark: %s",
+                    exc,
+                )
+                return _run_benchmark_isolated_in_process(state, pipeline_code)
+            raise
     return _run_benchmark_isolated_in_process(state, pipeline_code)
 
 
