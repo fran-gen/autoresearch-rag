@@ -15,7 +15,7 @@ from src.agents.history import format_config_for_karpathy
 from src.agents.karpathy_validation import validate_karpathy_code
 from src.agents.state import ResearchLabState
 from src.agents.text_utils import extract_text_content
-from src.config import get_settings
+from src.config import get_google_api_key, get_settings
 from src.models import ExperimentSpec, RetrievalConfig
 
 logger = logging.getLogger(__name__)
@@ -599,7 +599,7 @@ async def code_planner_agent(state: ResearchLabState) -> ResearchLabState:
             try:
                 llm = ChatGoogleGenerativeAI(
                     model=model_name,
-                    google_api_key=settings.google_api_key,
+                    google_api_key=get_google_api_key(),
                     temperature=0.4,
                 )
                 response = await llm.ainvoke([HumanMessage(content=prompt)])

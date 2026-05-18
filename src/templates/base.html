@@ -68,6 +68,35 @@
         });
       });
 
+      const openApiKeyDropdown = function () {
+        const dropdown = document.querySelector('[data-api-key-dropdown]');
+        if (!dropdown) {
+          return;
+        }
+
+        const trigger = dropdown.querySelector('.api-key-trigger');
+        if (trigger) {
+          trigger.setAttribute('aria-expanded', 'true');
+        }
+        dropdown.classList.add('is-active');
+
+        const navbarMenu = document.getElementById('app-navbar-menu');
+        if (navbarMenu && window.matchMedia('(max-width: 1023px)').matches) {
+          navbarMenu.classList.add('is-active');
+          document.querySelectorAll('.navbar-burger[data-target="app-navbar-menu"]').forEach(function (burger) {
+            burger.classList.add('is-active');
+            burger.setAttribute('aria-expanded', 'true');
+          });
+        }
+
+        const apiKeyInput = dropdown.querySelector('input[name="api_key"]');
+        if (apiKeyInput) {
+          setTimeout(function () {
+            apiKeyInput.focus();
+          }, 0);
+        }
+      };
+
       document.querySelectorAll('[data-command-center-layout]').forEach(function (layout) {
         const closeButtons = layout.querySelectorAll('[data-command-center-close]');
         const openButtons = layout.querySelectorAll('[data-command-center-open]');
@@ -305,14 +334,28 @@
         modal.classList.remove('is-active');
         modal.setAttribute('aria-hidden', 'true');
       };
+      const openModal = function (modal) {
+        modal.classList.add('is-active');
+        modal.setAttribute('aria-hidden', 'false');
+      };
 
       document.addEventListener('click', function (event) {
+        const openApiKeyTrigger = event.target.closest('[data-open-api-key-dropdown]');
+        if (openApiKeyTrigger) {
+          event.preventDefault();
+          openApiKeyDropdown();
+          const parentModal = openApiKeyTrigger.closest('.modal');
+          if (parentModal) {
+            closeModal(parentModal);
+          }
+          return;
+        }
+
         const trigger = event.target.closest('.js-modal-trigger');
         if (trigger) {
           const modal = document.getElementById(trigger.dataset.target);
           if (modal) {
-            modal.classList.add('is-active');
-            modal.setAttribute('aria-hidden', 'false');
+            openModal(modal);
           }
           return;
         }
@@ -332,6 +375,24 @@
         }
         document.querySelectorAll('.modal.is-active').forEach(closeModal);
       });
+
+      const apiKeyRequiredModal = document.querySelector('[data-api-key-required-modal]');
+      if (apiKeyRequiredModal) {
+        const reminderKey = apiKeyRequiredModal.getAttribute('data-api-key-reminder-key') || 'api-key-required-modal';
+        let alreadyShown = false;
+        try {
+          alreadyShown = sessionStorage.getItem(reminderKey) === '1';
+        } catch (error) {
+          alreadyShown = false;
+        }
+
+        if (!alreadyShown) {
+          openModal(apiKeyRequiredModal);
+          try {
+            sessionStorage.setItem(reminderKey, '1');
+          } catch (error) {}
+        }
+      }
     });
   </script>
   {% block scripts %}{% endblock %}

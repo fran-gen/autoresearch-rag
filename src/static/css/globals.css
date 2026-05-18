@@ -3054,6 +3054,65 @@ body::after {
   white-space: pre;
 }
 
+.api-key-required-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.api-key-required-modal.is-active {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.api-key-required-modal .modal-background {
+  background:
+    radial-gradient(circle at 50% 30%, rgba(220, 36, 76, .2), transparent 24rem),
+    rgba(4, 6, 12, .72);
+  backdrop-filter: blur(12px);
+}
+
+.api-key-required-modal-card {
+  width: min(32rem, calc(100vw - 2rem));
+  margin: auto;
+}
+
+.api-key-required-modal-card .modal-card-foot {
+  background: linear-gradient(135deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .015));
+  border-top: 1px solid var(--surface-border);
+  padding-block: 0.85rem;
+}
+
+.api-key-required-modal__copy {
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.api-key-required-modal__copy strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.api-key-required-modal__footer {
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.api-key-required-modal__footer .button.is-light {
+  border-color: var(--surface-border);
+  background: rgba(255, 255, 255, .06);
+  color: var(--text-on-dark);
+}
+
+.api-key-required-modal__footer .button.is-light:hover,
+.api-key-required-modal__footer .button.is-light:focus {
+  border-color: rgba(255, 255, 255, .24);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+}
+
 /* ── Config pills ─────────────────────────────────────────────────── */
 
 .pill-list {

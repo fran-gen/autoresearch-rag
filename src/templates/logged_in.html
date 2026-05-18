@@ -214,6 +214,28 @@
       </div>
     </section>
 
+    {% if current_endpoint == 'index' and not has_google_api_key %}
+      <div class="modal config-modal api-key-required-modal" id="api-key-required-modal" aria-hidden="true" data-api-key-required-modal data-api-key-reminder-key="api-key-required-modal-v1">
+        <div class="modal-background js-modal-close"></div>
+        <div class="modal-card config-modal-card api-key-required-modal-card">
+          <header class="modal-card-head">
+            <div>
+              <p class="modal-card-title">Google API key required</p>
+              <p class="field-hint mb-0">To use the app, upload your Google API key in the dedicated form in the header.</p>
+            </div>
+            <button class="delete js-modal-close" type="button" aria-label="close"></button>
+          </header>
+          <section class="modal-card-body">
+            <p class="api-key-required-modal__copy mb-0">Open the <strong>API Key</strong> menu in the top-right header, paste your key, and click <strong>Apply key</strong>.</p>
+          </section>
+          <footer class="modal-card-foot api-key-required-modal__footer">
+            <button class="button is-link" type="button" data-open-api-key-dropdown>Open API key form</button>
+            <button class="button is-light js-modal-close" type="button">Not now</button>
+          </footer>
+        </div>
+      </div>
+    {% endif %}
+
     <footer class="footer py-5">
       <div class="content has-text-centered is-size-7 has-text-grey">
         <p>© {{ current_year }} Monotonic Labs</p>

@@ -1819,6 +1819,12 @@ def build_leaderboard_rows(board: list[dict] | None) -> list[dict[str, object]]:
     return rows
 
 
+def has_google_api_key_for_session() -> bool:
+    if bool(session.get("runtime_google_api_key_set")):
+        return True
+    return bool(get_settings().google_api_key.strip())
+
+
 def api_request(method: str, path: str, **kwargs):
     url = f"{get_dashboard_api_base()}/{path.lstrip('/')}"
     timeout = kwargs.pop("timeout", 10)
@@ -2083,6 +2089,7 @@ def inject_template_context():
         "dashboard_live_mode": normalize_bool(session.get("live_mode"), default=False),
         "dashboard_refresh_every": normalize_refresh_seconds(session.get("refresh_every")),
         "sidebar_status": get_sidebar_status_snapshot(),
+        "has_google_api_key": has_google_api_key_for_session(),
         **user_data,
     }
 
@@ -2148,6 +2155,7 @@ def dashboard_api_key():
     next_url = (request.form.get("next") or "").strip() or url_for("index")
     if not api_key:
         api_request("POST", "/settings/api-key", json={"api_key": ""}, timeout=5)
+        session["runtime_google_api_key_set"] = False
         flash("API key cleared from runtime memory. The default server key will be used.", "success")
         return redirect(next_url)
 
@@ -2155,6 +2163,7 @@ def dashboard_api_key():
     if error:
         flash(f"The API service could not be updated: {error}", "warning")
     else:
+        session["runtime_google_api_key_set"] = True
         flash("API key applied in runtime memory. It was not saved or stored.", "success")
     return redirect(next_url)
 
