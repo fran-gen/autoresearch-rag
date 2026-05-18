@@ -4,6 +4,7 @@ import asyncio
 import random
 from pathlib import Path
 
+from src.agents.progress import report_progress
 from src.agents.state import ResearchLabState
 from src.benchmark.loader import BenchmarkDocument, BenchmarkQuestion, EnterpriseRagBenchLoader
 from src.benchmark.metrics import composite_score
@@ -54,16 +55,28 @@ async def _evaluate(
     documents: list[BenchmarkDocument],
     sampled_questions: list[BenchmarkQuestion],
     config: RetrievalConfig,
+    label: str,
 ):
     fn = runner.run if config.evaluation_mode == "full" else runner.run_fast
+    report_progress(
+        f"worker: {label}",
+        f"Running {label} retrieval on {len(sampled_questions)} benchmark questions.",
+        active_evaluation=label,
+        question_count=len(sampled_questions),
+    )
     return await asyncio.to_thread(fn, documents, sampled_questions, config)
 
 
 async def worker_agent(state: ResearchLabState) -> ResearchLabState:
     if not state["experiment_queue"]:
         state["current_phase"] = "worker"
+        state["latest_summary"] = "No queued experiment to evaluate."
+        report_progress("worker", "No queued experiment to evaluate.")
         return state
 
+    state["current_phase"] = "worker"
+    state["latest_summary"] = "Preparing benchmark documents and question sample."
+    report_progress("worker", state["latest_summary"])
     settings = get_settings()
     benchmark_root = Path(state.get("benchmark_root") or settings.benchmark_root)
     loader = EnterpriseRagBenchLoader(benchmark_root)
@@ -84,6 +97,18 @@ async def worker_agent(state: ResearchLabState) -> ResearchLabState:
         "holdout_questions": len(holdout_questions),
         "question_focus": state.get("question_focus") or "all",
     }
+    state["latest_summary"] = (
+        f"Loaded {len(documents)} documents and selected "
+        f"{len(tuning_questions)} tuning questions plus {len(holdout_questions)} holdout questions."
+    )
+    report_progress(
+        "worker: dataset ready",
+        state["latest_summary"],
+        documents=len(documents),
+        questions=len(questions),
+        sampled_questions=len(sampled_questions),
+        holdout_questions=len(holdout_questions),
+    )
 
     experiment = state["experiment_queue"][0]
     incumbent_config = state["best_config"] or experiment.retrieval_config
@@ -91,19 +116,36 @@ async def worker_agent(state: ResearchLabState) -> ResearchLabState:
 
     # A/B: evaluate incumbent and candidate on the same sampled subset.
     _, incumbent_metrics = await _evaluate(
-        runner, documents, tuning_questions, incumbent_config
+        runner, documents, tuning_questions, incumbent_config, "baseline tuning"
     )
     incumbent_score = composite_score(incumbent_metrics)
+    report_progress(
+        "worker: candidate retrieval",
+        "Baseline retrieval finished; evaluating the candidate retrieval configuration.",
+        baseline_score=incumbent_score,
+    )
 
     question_results, metrics = await _evaluate(
-        runner, documents, tuning_questions, experiment.retrieval_config
+        runner, documents, tuning_questions, experiment.retrieval_config, "candidate tuning"
     )
     candidate_score = composite_score(metrics)
+    report_progress(
+        "worker: holdout retrieval",
+        "Candidate tuning retrieval finished; validating baseline on holdout questions.",
+        baseline_score=incumbent_score,
+        candidate_score=candidate_score,
+    )
     _, incumbent_validation_metrics = await _evaluate(
-        runner, documents, holdout_questions, incumbent_config
+        runner, documents, holdout_questions, incumbent_config, "baseline holdout"
+    )
+    report_progress(
+        "worker: holdout retrieval",
+        "Baseline holdout retrieval finished; validating candidate on holdout questions.",
+        baseline_score=incumbent_score,
+        candidate_score=candidate_score,
     )
     _, candidate_validation_metrics = await _evaluate(
-        runner, documents, holdout_questions, experiment.retrieval_config
+        runner, documents, holdout_questions, experiment.retrieval_config, "candidate holdout"
     )
     incumbent_validation_score = composite_score(incumbent_validation_metrics)
     candidate_validation_score = composite_score(candidate_validation_metrics)
@@ -123,4 +165,12 @@ async def worker_agent(state: ResearchLabState) -> ResearchLabState:
     state["completed_experiments"] = state["completed_experiments"] + [experiment]
     state["experiment_queue"] = state["experiment_queue"][1:]
     state["current_phase"] = "worker"
+    state["latest_summary"] = "Retrieval evaluation finished; scoring and summarizing the experiment."
+    report_progress(
+        "worker: complete",
+        state["latest_summary"],
+        baseline_score=incumbent_score,
+        candidate_score=candidate_score,
+        candidate_validation_score=candidate_validation_score,
+    )
     return state

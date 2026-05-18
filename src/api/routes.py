@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.agents.graph import build_research_graph, default_state
+from src.agents.progress import reset_progress_reporter, set_progress_reporter
 from src.agents.text_utils import extract_text_content
 from src.benchmark.loader import EnterpriseRagBenchLoader
 from src.benchmark.metrics import composite_score
@@ -291,6 +292,22 @@ async def _run_research_loop(run_id: str) -> None:
     graph = build_research_graph()
     run_runtime = runtimes[run_id]
 
+    def report_runtime_progress(
+        phase: str,
+        summary: str | None,
+        detail: dict[str, Any] | None,
+    ) -> None:
+        run_runtime.state["current_phase"] = phase
+        if summary is not None:
+            run_runtime.state["latest_summary"] = summary
+        if detail:
+            progress_detail = dict(run_runtime.state.get("progress_detail") or {})
+            progress_detail.update(detail)
+            progress_detail["phase"] = phase
+            progress_detail["updated_at"] = time.time()
+            run_runtime.state["progress_detail"] = progress_detail
+
+    progress_token = set_progress_reporter(report_runtime_progress)
     try:
         async for event in graph.astream(run_runtime.state, stream_mode="values"):
             run_runtime.state = dict(event)
@@ -307,6 +324,7 @@ async def _run_research_loop(run_id: str) -> None:
         run_runtime.state["current_phase"] = "failed"
         run_runtime.state["latest_summary"] = f"Research loop failed: {exc}"
     finally:
+        reset_progress_reporter(progress_token)
         run_runtime.running = False
         run_runtime.task = None
 
@@ -352,6 +370,7 @@ def _empty_status(run_id: str | None = None) -> dict[str, Any]:
         "current_pipeline_code": "",
         "proposed_code": "",
         "code_history": [],
+        "progress_detail": {},
     }
 
 
@@ -371,6 +390,7 @@ def _status_summary_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "final_report": extract_text_content(run_runtime.state.get("final_report")),
         "last_error": run_runtime.last_error,
         "research_mode": run_runtime.state.get("research_mode", "config"),
+        "progress_detail": run_runtime.state.get("progress_detail", {}),
     }
 
 
@@ -447,6 +467,7 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "tried_config_count": len(run_runtime.state.get("tried_config_fingerprints", []) or []),
         "rejected_config_count": len(run_runtime.state.get("rejected_config_fingerprints", []) or []),
         "last_error": run_runtime.last_error,
+        "progress_detail": run_runtime.state.get("progress_detail", {}),
         # Karpathy mode fields
         "research_mode": run_runtime.state.get("research_mode", "config"),
         "karpathy_branch": run_runtime.state.get("karpathy_branch", ""),
