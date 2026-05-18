@@ -40,7 +40,7 @@
 
               <div class="navbar-dropdown is-right">
                 <p class="api-key-menu__title">Use your API key</p>
-                <p class="api-key-menu__copy">Paste a Google Gemini API key for this runtime session. It won't be saved.</p>
+                <p class="api-key-menu__copy">Paste a Google Gemini API key for your current dashboard session.</p>
                 <form class="api-key-form" method="post" action="{{ url_for('dashboard_api_key') }}">
                   <input type="hidden" name="next" value="{{ request.path }}">
                   <div class="field">
@@ -55,7 +55,7 @@
                     </div>
                   </div>
                 </form>
-                <p class="api-key-menu__status">Leave the field empty and apply to clear it from runtime memory.</p>
+                <p class="api-key-menu__status">Leave the field empty and apply to clear it for this session.</p>
               </div>
             </div>
 
@@ -215,7 +215,7 @@
     </section>
 
     {% if current_endpoint == 'index' and not has_google_api_key %}
-      <div class="modal config-modal api-key-required-modal" id="api-key-required-modal" aria-hidden="true" data-api-key-required-modal data-api-key-reminder-key="api-key-required-modal-v1">
+      <div class="modal config-modal api-key-required-modal" id="api-key-required-modal" aria-hidden="true" data-api-key-required-modal>
         <div class="modal-background js-modal-close"></div>
         <div class="modal-card config-modal-card api-key-required-modal-card">
           <header class="modal-card-head">

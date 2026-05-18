@@ -378,20 +378,7 @@
 
       const apiKeyRequiredModal = document.querySelector('[data-api-key-required-modal]');
       if (apiKeyRequiredModal) {
-        const reminderKey = apiKeyRequiredModal.getAttribute('data-api-key-reminder-key') || 'api-key-required-modal';
-        let alreadyShown = false;
-        try {
-          alreadyShown = sessionStorage.getItem(reminderKey) === '1';
-        } catch (error) {
-          alreadyShown = false;
-        }
-
-        if (!alreadyShown) {
-          openModal(apiKeyRequiredModal);
-          try {
-            sessionStorage.setItem(reminderKey, '1');
-          } catch (error) {}
-        }
+        openModal(apiKeyRequiredModal);
       }
     });
   </script>

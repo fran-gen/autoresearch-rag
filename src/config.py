@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 
@@ -5,7 +6,10 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-_runtime_google_api_key = ""
+_runtime_google_api_key: ContextVar[str] = ContextVar(
+    "runtime_google_api_key",
+    default="",
+)
 
 
 class Settings(BaseSettings):
@@ -88,12 +92,14 @@ class Settings(BaseSettings):
 
 
 def set_runtime_google_api_key(api_key: str) -> None:
-    global _runtime_google_api_key
-    _runtime_google_api_key = api_key.strip()
+    _runtime_google_api_key.set(api_key.strip())
 
 
 def get_google_api_key() -> str:
-    return _runtime_google_api_key or get_settings().google_api_key.strip()
+    runtime_key = _runtime_google_api_key.get().strip()
+    if runtime_key:
+        return runtime_key
+    return get_settings().google_api_key.strip()
 
 
 @lru_cache(maxsize=1)

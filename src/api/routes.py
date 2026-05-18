@@ -53,9 +53,7 @@ DATASET_READINESS_STATUS_TTL_SECONDS = 30.0
 async def _apply_runtime_api_key_from_header(
     x_google_api_key: str | None = Header(default=None),
 ) -> None:
-    if x_google_api_key and x_google_api_key.strip():
-        set_runtime_google_api_key(x_google_api_key)
-        _chat_llm.cache_clear()
+    set_runtime_google_api_key((x_google_api_key or "").strip())
 
 
 router = APIRouter(dependencies=[Depends(_apply_runtime_api_key_from_header)])
@@ -209,12 +207,11 @@ async def dataset_status():
     return _dataset_readiness()
 
 
-@lru_cache(maxsize=2)
-def _chat_llm(model_name: str) -> ChatGoogleGenerativeAI:
-    settings = get_settings()
+@lru_cache(maxsize=16)
+def _chat_llm(model_name: str, api_key: str) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         model=model_name,
-        google_api_key=get_google_api_key(),
+        google_api_key=api_key,
         temperature=0.1,
         request_timeout=30,
         retries=2,
@@ -225,8 +222,18 @@ def _chat_llm(model_name: str) -> ChatGoogleGenerativeAI:
 async def set_api_key(payload: dict[str, Any]):
     api_key = str(payload.get("api_key") or "").strip()
     set_runtime_google_api_key(api_key)
-    _chat_llm.cache_clear()
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "message": "Runtime API keys are request-scoped. Send X-Google-Api-Key per request.",
+    }
+
+
+@router.get("/settings/api-key/status")
+async def api_key_status():
+    settings = get_settings()
+    return {
+        "has_google_key": bool(settings.has_google_key),
+    }
 
 
 def _candidate_chat_models() -> list[str]:
@@ -655,10 +662,11 @@ async def rag_chat(payload: dict[str, Any]):
     response = None
     model_name = ""
     errors: list[str] = []
+    api_key = get_google_api_key()
     for candidate_model in _candidate_chat_models():
         model_name = candidate_model
         try:
-            response = _chat_llm(candidate_model).invoke([HumanMessage(content=prompt)])
+            response = _chat_llm(candidate_model, api_key).invoke([HumanMessage(content=prompt)])
             break
         except Exception as exc:
             errors.append(f"{candidate_model}: {str(exc)[:220]}")
