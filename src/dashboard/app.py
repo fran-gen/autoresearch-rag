@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -416,6 +417,33 @@ def remember_post_login_redirect() -> None:
     session["post_login_redirect_url"] = {"url": current_redirect_target()}
 
 
+def unauthenticated_background_response():
+    """Keep long-running dashboard polling quiet when auth expires mid-run."""
+    if request.endpoint == "dashboard_status_snapshot":
+        return jsonify(
+            {
+                "should_poll": False,
+                "auth_required": True,
+                "sidebar_status": {
+                    "reachable": False,
+                    "state": "Signed out",
+                    "state_class": "warning",
+                    "phase": "authentication required",
+                    "progress_pct": 0,
+                    "message": "Sign in again to resume live dashboard updates.",
+                    "last_error": None,
+                    "accepted": 0,
+                    "rejected": 0,
+                    "best_score": None,
+                    "updated_at": datetime.now().strftime("%H:%M:%S"),
+                },
+            }
+        )
+    if request.endpoint == "experiments" and request.args.get("partial") == "1":
+        return Response(status=204)
+    return jsonify({"detail": "Authentication required.", "auth_required": True}), 401
+
+
 def ensure_active_event_loop() -> asyncio.AbstractEventLoop:
     try:
         loop = asyncio.get_event_loop()
@@ -783,13 +811,26 @@ def describe_question_focus(question_focus: str) -> str:
 def get_question_type_options() -> list[dict[str, object]]:
     settings = get_settings()
     loader = EnterpriseRagBenchLoader(settings.benchmark_root)
+    questions = loader.load_questions()
     counts: dict[str, int] = {}
-    for question in loader.load_questions():
+    previews: dict[str, list[dict[str, object]]] = {"all": []}
+    for question in questions:
         qtype = question.question_type or "unknown"
         counts[qtype] = counts.get(qtype, 0) + 1
-    options = [{"value": "all", "label": "Generic mix", "count": sum(counts.values()), "description": "Balanced benchmark coverage across question types.", "tooltip": describe_question_focus("all"), "starting_config": build_starting_config_for_focus("all")}]
+        preview = {
+            "question_id": question.question_id,
+            "question": question.question,
+            "source_types": question.source_types,
+            "expected_doc_count": len(question.expected_doc_ids),
+        }
+        if len(previews["all"]) < 5:
+            previews["all"].append(preview)
+        previews.setdefault(qtype, [])
+        if len(previews[qtype]) < 5:
+            previews[qtype].append(preview)
+    options = [{"value": "all", "label": "Generic mix", "count": sum(counts.values()), "description": "Balanced benchmark coverage across question types.", "tooltip": describe_question_focus("all"), "starting_config": build_starting_config_for_focus("all"), "preview_questions": previews["all"]}]
     for qtype, count in sorted(counts.items(), key=lambda item: item[0]):
-        options.append({"value": qtype, "label": qtype.replace("_", " ").title(), "count": count, "description": f"Tune starting config for {qtype.replace('_', ' ')} questions.", "tooltip": describe_question_focus(qtype), "starting_config": build_starting_config_for_focus(qtype)})
+        options.append({"value": qtype, "label": qtype.replace("_", " ").title(), "count": count, "description": f"Tune starting config for {qtype.replace('_', ' ')} questions.", "tooltip": describe_question_focus(qtype), "starting_config": build_starting_config_for_focus(qtype), "preview_questions": previews.get(qtype, [])})
     return options
 
 
@@ -1188,11 +1229,22 @@ def build_taxonomy_rows(taxonomy: dict | None) -> list[dict[str, object]]:
     return rows
 
 
-def build_dataset_readiness_rows(readiness: dict | None) -> list[dict[str, object]]:
+def build_dataset_readiness_rows(
+    readiness: dict | None,
+    *,
+    running: bool = False,
+) -> list[dict[str, object]]:
     readiness = readiness or {}
     if "ready" in readiness:
+        cached_running = bool(running and readiness.get("cached"))
         data_loaded = bool(readiness.get("has_documents") and readiness.get("has_questions"))
         index_loaded = bool(readiness.get("qdrant_ready") or readiness.get("qdrant_busy"))
+        if cached_running:
+            return [
+                {"label": "Data status", "value": "In use"},
+                {"label": "Embedding index", "value": "In use" if index_loaded else "Cached"},
+                {"label": "Overall status", "value": "Active run"},
+            ]
         return [
             {"label": "Data loaded", "value": "Yes" if data_loaded else "No"},
             {"label": "Embedding index", "value": "Loaded" if index_loaded else "Not ready"},
@@ -1224,6 +1276,60 @@ def build_hypothesis_rows(items: list[dict] | None) -> list[dict[str, object]]:
         )
     rows.sort(key=lambda row: row["created_at_sort"] or datetime.min, reverse=True)
     return rows
+
+
+def normalize_hypothesis_ids(value: object) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        ids = [str(item).strip() for item in value if str(item or "").strip()]
+        return list(dict.fromkeys(ids))
+
+    text = str(value or "").strip()
+    if not text or text == "—":
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return normalize_hypothesis_ids(parsed)
+    for separator in (",", ";"):
+        if separator in text:
+            return list(dict.fromkeys(part.strip() for part in text.split(separator) if part.strip()))
+    return [text]
+
+
+def find_hypothesis_detail(
+    lookup_id: str,
+    hypothesis_rows: list[dict[str, object]],
+    experiment_rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], str | None, str]:
+    query = lookup_id.strip()
+    if not query:
+        return [], [], None, ""
+
+    hypothesis_index = {str(row.get("id") or ""): row for row in hypothesis_rows}
+    matched_ids = normalize_hypothesis_ids(query) if query in hypothesis_index else []
+    matched_experiment_id = ""
+
+    if not matched_ids:
+        for experiment in experiment_rows:
+            if str(experiment.get("id") or "") == query:
+                matched_ids = normalize_hypothesis_ids(experiment.get("hypothesis_ids") or experiment.get("hypothesis_id"))
+                matched_experiment_id = query
+                break
+
+    selected_hypotheses = [hypothesis_index[hypothesis_id] for hypothesis_id in matched_ids if hypothesis_id in hypothesis_index]
+    if not selected_hypotheses:
+        return [], [], f"No hypothesis found for '{query}'.", matched_experiment_id
+
+    selected_ids = {str(row.get("id") or "") for row in selected_hypotheses}
+    related_experiments = [
+        experiment
+        for experiment in experiment_rows
+        if selected_ids.intersection(normalize_hypothesis_ids(experiment.get("hypothesis_ids") or experiment.get("hypothesis_id")))
+    ]
+    return selected_hypotheses, related_experiments, None, matched_experiment_id
 
 
 def build_failure_chart_rows(results: list[dict] | None) -> list[dict[str, object]]:
@@ -1287,13 +1393,15 @@ def build_experiment_rows(
         question_ids = item.get("question_ids") if isinstance(item.get("question_ids"), list) else []
         score_item = board_index.get(experiment_id, {})
         created_at = parse_iso_datetime(item.get("created_at"))
+        hypothesis_ids = normalize_hypothesis_ids(item.get("hypothesis_id"))
         rows.append(
             {
                 "id": experiment_id,
                 "name": item.get("name") or "Untitled",
                 "run_id": item.get("run_id") or "",
                 "run_position": item.get("run_position"),
-                "hypothesis_id": item.get("hypothesis_id") or "—",
+                "hypothesis_ids": hypothesis_ids,
+                "hypothesis_id": ", ".join(hypothesis_ids) or "—",
                 "strategy": config.get("strategy") if isinstance(config, dict) else None,
                 "top_k": config.get("top_k") if isinstance(config, dict) else None,
                 "question_count": len(question_ids),
@@ -1672,6 +1780,8 @@ def build_journey_entries(score_history: list[dict] | None, baseline_config: dic
         entries.append(
             {
                 "iteration": entry.get("iteration"),
+                "experiment_id": str(entry.get("experiment_id") or ""),
+                "hypothesis_id": (normalize_hypothesis_ids(entry.get("hypothesis_id")) or [""])[0],
                 "score": score,
                 "baseline": baseline,
                 "delta": delta,
@@ -1693,6 +1803,8 @@ def build_code_history_entries(code_history: list[dict] | None, baseline_config:
         entries.append(
             {
                 **entry,
+                "experiment_id": str(entry.get("experiment_id") or ""),
+                "hypothesis_id": (normalize_hypothesis_ids(entry.get("hypothesis_id")) or [""])[0],
                 "hypothesis": normalize_display_text(entry.get("hypothesis")),
                 "diff_summary": normalize_display_text(entry.get("diff_summary")),
                 "config_items": build_config_items(proposed_config, baseline_config),
@@ -1722,15 +1834,40 @@ def build_leaderboard_rows(board: list[dict] | None) -> list[dict[str, object]]:
     return rows
 
 
+def has_google_api_key_for_session() -> bool:
+    if bool(session.get("runtime_google_api_key")):
+        return True
+    return bool(get_settings().google_api_key.strip())
+
+
 def api_request(method: str, path: str, **kwargs):
     url = f"{get_dashboard_api_base()}/{path.lstrip('/')}"
     timeout = kwargs.pop("timeout", 10)
+    headers = dict(kwargs.pop("headers", {}) or {})
+    runtime_api_key = ""
+    if has_request_context():
+        runtime_api_key = str(session.get("runtime_google_api_key") or "").strip()
+    if runtime_api_key:
+        headers["X-Google-Api-Key"] = runtime_api_key
+    if headers:
+        kwargs["headers"] = headers
+    started_at = time.perf_counter()
 
     try:
         response = requests.request(method, url, timeout=timeout, **kwargs)
     except requests.RequestException as exc:
-        logger.warning("Dashboard API request failed for %s: %s", url, exc)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.warning("Dashboard API request failed for %s after %.1fms: %s", url, elapsed_ms, exc)
         return None, f"Could not reach API at {url}."
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    if elapsed_ms > 500:
+        logger.warning(
+            "Dashboard API request slow method=%s path=%s status=%s elapsed_ms=%.1f",
+            method,
+            path,
+            response.status_code,
+            elapsed_ms,
+        )
 
     if not response.ok:
         detail = None
@@ -1850,7 +1987,10 @@ def get_dashboard_status():
         "journey_entries": build_journey_entries(score_history, baseline_config),
         "per_type_rows": parse_per_type_summary(status.get("per_type_summary") if status else None),
         "taxonomy_rows": build_taxonomy_rows(status.get("failure_taxonomy") if status else None),
-        "dataset_readiness_rows": build_dataset_readiness_rows(status.get("dataset_readiness") if status else None),
+        "dataset_readiness_rows": build_dataset_readiness_rows(
+            status.get("dataset_readiness") if status else None,
+            running=is_running,
+        ),
         "recommendation": status.get("recommendation") if status else None,
         "validation_summary": status.get("validation_summary") if status else None,
         "final_report_html": render_markdown(status.get("final_report") if status else None),
@@ -1901,7 +2041,7 @@ def get_sidebar_status_snapshot() -> dict[str, object]:
         "GET",
         "/research/status",
         timeout=2,
-        params=status_params,
+        params={**status_params, "detail": "summary"},
     )
     if error or not isinstance(status, dict):
         if session.get("research_pending"):
@@ -1972,6 +2112,7 @@ def inject_template_context():
         "dashboard_live_mode": normalize_bool(session.get("live_mode"), default=False),
         "dashboard_refresh_every": normalize_refresh_seconds(session.get("refresh_every")),
         "sidebar_status": get_sidebar_status_snapshot(),
+        "has_google_api_key": has_google_api_key_for_session(),
         **user_data,
     }
 
@@ -1987,7 +2128,7 @@ def protect_dashboard_routes():
         return None
 
     if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return jsonify({"detail": "Authentication required."}), 401
+        return unauthenticated_background_response()
 
     remember_post_login_redirect()
     return redirect(url_for("login"))
@@ -2036,15 +2177,12 @@ def dashboard_api_key():
     api_key = (request.form.get("api_key") or "").strip()
     next_url = (request.form.get("next") or "").strip() or url_for("index")
     if not api_key:
-        api_request("POST", "/settings/api-key", json={"api_key": ""}, timeout=5)
-        flash("API key cleared from runtime memory. The default server key will be used.", "success")
+        session.pop("runtime_google_api_key", None)
+        flash("API key cleared for this dashboard session. The default server key will be used.", "success")
         return redirect(next_url)
 
-    _, error = api_request("POST", "/settings/api-key", json={"api_key": api_key}, timeout=5)
-    if error:
-        flash(f"The API service could not be updated: {error}", "warning")
-    else:
-        flash("API key applied in runtime memory. It was not saved or stored.", "success")
+    session["runtime_google_api_key"] = api_key
+    flash("API key applied for this dashboard session.", "success")
     return redirect(next_url)
 
 
@@ -2226,11 +2364,40 @@ def experiments():
     )
 
 
-@app.route("/hypotheses")
+@app.route("/hypotheses", methods=["GET", "POST"])
 def hypotheses():
     items, error = api_request("GET", "/hypotheses")
+    experiment_items, experiment_error = api_request("GET", "/experiments")
     rows = build_hypothesis_rows(items or [])
-    return render_template("hypotheses.html", hypotheses=rows, error=error)
+    experiment_rows = build_experiment_rows(experiment_items or [])
+
+    if request.method == "POST":
+        lookup_id = (request.form.get("lookup_id") or "").strip()
+    else:
+        lookup_id = (
+            request.args.get("hypothesis_id")
+            or request.args.get("experiment_id")
+            or request.args.get("lookup_id")
+            or ""
+        ).strip()
+
+    selected_hypotheses, related_experiments, search_error, matched_experiment_id = find_hypothesis_detail(
+        lookup_id,
+        rows,
+        experiment_rows,
+    )
+    return render_template(
+        "hypotheses.html",
+        hypotheses=rows,
+        experiments=experiment_rows,
+        selected_hypotheses=selected_hypotheses,
+        related_experiments=related_experiments,
+        lookup_id=lookup_id,
+        matched_experiment_id=matched_experiment_id,
+        error=error,
+        experiment_error=experiment_error,
+        search_error=search_error,
+    )
 
 
 @app.route("/experiments/new")

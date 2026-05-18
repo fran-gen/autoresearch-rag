@@ -17,7 +17,6 @@ from src.config import get_google_api_key, get_settings
 from src.models import ExperimentStatus, QuestionResult
 
 logger = logging.getLogger(__name__)
-UNSCORED_RETRIEVAL_QUESTION_TYPES = frozenset({"info_not_found"})
 
 
 def _config_fingerprint_from_dict(config: dict) -> str:
@@ -29,28 +28,16 @@ def _build_per_type_breakdown(
     question_results: list[QuestionResult],
     top_k: int,
     benchmark_root: str | None = None,
-) -> tuple[str, list[dict], dict[str, float]]:
-    """Compute per-question-type recall/precision and pick worst failures.
-
-    Returns (per_type_summary, failure_examples, per_type_recalls) where
-    per_type_recalls maps question_type -> average recall for delta computation.
-    """
+) -> tuple[str, list[dict]]:
+    """Compute per-question-type recall/precision and pick worst failures."""
     settings = get_settings()
     loader = EnterpriseRagBenchLoader(Path(benchmark_root) if benchmark_root else settings.benchmark_root)
     questions = loader.load_questions()
     q_map = {q.question_id: q for q in questions}
 
-    doc_map: dict[str, object] | None = None
-    try:
-        documents = loader.load_documents()
-        doc_map = {d.document_id: d for d in documents}
-    except Exception:
-        pass
-
     type_recalls: dict[str, list[float]] = defaultdict(list)
     type_precisions: dict[str, list[float]] = defaultdict(list)
     type_counts: dict[str, int] = defaultdict(int)
-    unscored_type_counts: dict[str, int] = defaultdict(int)
     scored: list[tuple[float, dict]] = []
 
     for result in question_results:
@@ -58,72 +45,37 @@ def _build_per_type_breakdown(
         if q is None:
             continue
         qtype = q.question_type or "unknown"
-        gt = set(q.expected_doc_ids) if q.expected_doc_ids else set()
-        if not gt:
-            unscored_type_counts[qtype] += 1
-            continue
         type_counts[qtype] += 1
+        gt = set(q.expected_doc_ids) if q.expected_doc_ids else set()
         pred = set(result.document_ids[:top_k])
+        if not gt:
+            continue
         recall = len(pred & gt) / len(gt)
         precision = len(pred & gt) / len(pred) if pred else 0.0
         type_recalls[qtype].append(recall)
         type_precisions[qtype].append(precision)
-
-        entry: dict = {
+        scored.append((recall, {
             "question_id": result.question_id,
             "question": q.question[:200],
             "question_type": qtype,
             "expected_doc_ids": q.expected_doc_ids[:5],
             "retrieved_doc_ids": result.document_ids[:top_k],
             "recall": round(recall, 3),
-        }
-
-        if result.document_scores:
-            entry["retrieved_scores"] = [round(s, 4) for s in result.document_scores[:top_k]]
-
-        missed_ids = gt - pred
-        if missed_ids and doc_map:
-            missed_snippets = []
-            for mid in list(missed_ids)[:3]:
-                doc_obj = doc_map.get(mid)
-                if doc_obj is not None:
-                    title = getattr(doc_obj, "title", "") or ""
-                    body = getattr(doc_obj, "body", "") or ""
-                    snippet = f"{title}: {body}"[:200]
-                    missed_snippets.append({"doc_id": mid, "text_snippet": snippet})
-                else:
-                    missed_snippets.append({"doc_id": mid, "text_snippet": "(not found)"})
-            entry["missed_doc_snippets"] = missed_snippets
-
-        scored.append((recall, entry))
+        }))
 
     lines: list[str] = []
-    per_type_recall_avgs: dict[str, float] = {}
     for qtype in sorted(type_counts, key=lambda t: type_counts[t], reverse=True):
         n = type_counts[qtype]
         recs = type_recalls.get(qtype, [])
         precs = type_precisions.get(qtype, [])
         avg_r = sum(recs) / max(len(recs), 1)
         avg_p = sum(precs) / max(len(precs), 1)
-        per_type_recall_avgs[qtype] = avg_r
         lines.append(f"{qtype}: recall={avg_r:.3f} precision={avg_p:.3f} ({n}q)")
-    for qtype in sorted(
-        unscored_type_counts,
-        key=lambda t: unscored_type_counts[t],
-        reverse=True,
-    ):
-        n = unscored_type_counts[qtype]
-        if qtype in UNSCORED_RETRIEVAL_QUESTION_TYPES:
-            lines.append(
-                f"{qtype}: skipped in retrieval-only scoring ({n}q without expected docs)"
-            )
-        else:
-            lines.append(f"{qtype}: no retrieval ground truth ({n}q)")
 
     per_type_summary = " | ".join(lines) if lines else "No per-type data."
     scored.sort(key=lambda x: x[0])
     failure_examples = [item for _, item in scored[:5]]
-    return per_type_summary, failure_examples, per_type_recall_avgs
+    return per_type_summary, failure_examples
 
 
 def _classify_failures(
@@ -172,6 +124,21 @@ def _recommend_next_action(per_type_summary: str, taxonomy: dict[str, int]) -> s
     return f"Continue tuning from the per-type breakdown: {per_type_summary or 'no per-type data yet.'}"
 
 
+def _format_score(value: float | None) -> str:
+    return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
+def _format_signed_score(value: float | None) -> str:
+    return f"{value:+.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
+def _acceptance_delta_threshold(state: ResearchLabState) -> float:
+    """Require real lift on the first run, then accept non-regressions."""
+    if state.get("iteration", 0) >= 1:
+        return 0.0
+    return state["min_improvement_delta"]
+
+
 async def _generate_final_report(state: ResearchLabState) -> str:
     """Ask the LLM for a synthesis of the research session."""
     settings = get_settings()
@@ -185,17 +152,25 @@ async def _generate_final_report(state: ResearchLabState) -> str:
     for r in results:
         verdict = "ACCEPTED" if r.accepted else "REJECTED"
         history_lines.append(
-            f"  {r.experiment_id}: score={r.composite_score:.4f} "
-            f"delta={r.delta_vs_baseline:.4f} [{verdict}]"
+            f"  {r.experiment_id}: score={_format_score(r.composite_score)} "
+            f"delta={_format_signed_score(r.delta_vs_baseline)} [{verdict}]"
         )
+
+    improvement = best - initial if best >= 0 and initial >= 0 else None
+    improvement_pct = (
+        (improvement / max(initial, 0.001)) * 100
+        if improvement is not None and initial > 0
+        else None
+    )
 
     prompt = (
         "You are a research assistant summarizing an automated RAG optimization session.\n\n"
         f"## Session stats\n"
         f"- Iterations: {state['iteration']}\n"
-        f"- Initial baseline score: {initial:.4f}\n"
-        f"- Final best score: {best:.4f}\n"
-        f"- Improvement: {best - initial:.4f} ({((best - initial) / max(initial, 0.001)) * 100:.1f}%)\n"
+        f"- Initial baseline score: {_format_score(initial if initial >= 0 else None)}\n"
+        f"- Final best score: {_format_score(best if best >= 0 else None)}\n"
+        f"- Improvement: {_format_signed_score(improvement)} "
+        f"({f'{improvement_pct:+.1f}%' if improvement_pct is not None else 'n/a'})\n"
         f"- Accepted: {state['accepted_experiments']}, Rejected: {state['rejected_experiments']}\n\n"
         f"## Experiment history\n{''.join(history_lines) if history_lines else 'None'}\n\n"
         f"## Final per-type performance\n{state.get('per_type_summary', 'N/A')}\n\n"
@@ -223,15 +198,17 @@ async def _generate_final_report(state: ResearchLabState) -> str:
 def _fallback_report(state: ResearchLabState) -> str:
     initial = state.get("initial_baseline_score", -1.0)
     best = state.get("best_score", -1.0)
-    delta = best - initial if initial >= 0 else 0.0
-    pct = (delta / max(initial, 0.001)) * 100
+    delta = best - initial if initial >= 0 and best >= 0 else None
+    pct = (delta / max(initial, 0.001)) * 100 if delta is not None and initial > 0 else None
 
     return (
         f"Research session completed: {state['iteration']} iterations, "
         f"{state['accepted_experiments']} accepted, "
         f"{state['rejected_experiments']} rejected.\n\n"
-        f"Score improved from {initial:.4f} to {best:.4f} "
-        f"(+{delta:.4f}, +{pct:.1f}%).\n\n"
+        f"Score changed from {_format_score(initial if initial >= 0 else None)} "
+        f"to {_format_score(best if best >= 0 else None)} "
+        f"({_format_signed_score(delta)}, "
+        f"{f'{pct:+.1f}%' if pct is not None else 'n/a'}).\n\n"
         f"Remaining weak areas: {state.get('per_type_summary', 'N/A')}"
     )
 
@@ -297,7 +274,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         if latest.baseline_score is not None
         else state["best_score"]
     )
-    min_delta = state["min_improvement_delta"]
+    min_delta = _acceptance_delta_threshold(state)
     delta = (
         latest.delta_vs_baseline
         if latest.delta_vs_baseline is not None
@@ -314,8 +291,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
             else latest.composite_score
         )
 
-    required_delta = max(min_delta, 1e-12)
-    threshold_ok = current_best < 0 or delta > required_delta
+    threshold_ok = current_best < 0 or delta >= min_delta
     improved = completed_ok and threshold_ok and validation_ok
     verdict_reason = "Accepted."
     if improved and latest_experiment is not None:
@@ -324,7 +300,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         state["accepted_experiments"] += 1
         latest.accepted = True
         verdict_reason = (
-            f"Accepted: score improved to {latest.composite_score:.4f} "
+            f"Accepted: score reached {latest.composite_score:.4f} "
             f"(baseline {current_best:.4f}, delta {delta:.4f})."
         )
         latest.improvement_summary = verdict_reason
@@ -339,7 +315,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         elif not threshold_ok:
             verdict_reason = (
                 f"Rejected: score {latest.composite_score:.4f} did not exceed "
-                f"baseline {current_best:.4f} by > {min_delta:.4f} "
+                f"baseline {current_best:.4f} by >= {min_delta:.4f} "
                 f"(delta {delta:.4f})."
             )
         else:
@@ -369,7 +345,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
     state["score_history"] = state.get("score_history", []) + [{
         "iteration": state["iteration"],
         "experiment_id": latest.experiment_id,
-        "status": latest.status.value,
+        "hypothesis_id": latest_experiment.hypothesis_id if latest_experiment is not None else "",
         "score": round(latest.composite_score, 4),
         "baseline": round(history_baseline, 4) if history_baseline is not None else None,
         "validation_score": round(latest.validation_score, 4) if latest.validation_score is not None else None,
@@ -412,9 +388,13 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
 
         state["code_history"] = state.get("code_history", []) + [{
             "iteration": state["iteration"],
+            "experiment_id": latest.experiment_id,
+            "hypothesis_id": latest_experiment.hypothesis_id if latest_experiment is not None else "",
             "hypothesis": hypothesis_title,
             "score": round(latest.composite_score, 4),
             "accepted": latest.accepted,
+            "reason": verdict_reason,
+            "failure_analysis": latest.failure_analysis,
             "diff_summary": diff_summary,
             "proposed_code": proposed,
             "proposed_config": proposed_config_dump,
@@ -424,91 +404,11 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
     if latest_experiment is not None:
         top_k = latest_experiment.retrieval_config.top_k
 
-    per_type_summary, failure_examples, per_type_recalls = _build_per_type_breakdown(
+    per_type_summary, failure_examples = _build_per_type_breakdown(
         latest.question_results, top_k, state.get("benchmark_root")
     )
     state["per_type_summary"] = per_type_summary
     state["failure_examples"] = failure_examples
-
-    prev_recalls = state.get("previous_per_type_recalls", {})
-    if prev_recalls and per_type_recalls:
-        delta_parts = []
-        all_types = sorted(set(prev_recalls) | set(per_type_recalls))
-        for qtype in all_types:
-            old_r = prev_recalls.get(qtype, 0.0)
-            new_r = per_type_recalls.get(qtype, 0.0)
-            d = new_r - old_r
-            delta_parts.append(f"{qtype}: recall {d:+.3f}")
-        state["per_type_deltas"] = " | ".join(delta_parts)
-    else:
-        state["per_type_deltas"] = ""
-    state["previous_per_type_recalls"] = per_type_recalls
-
-    if state.get("research_mode") == "karpathy":
-        per_type_impact = {}
-        if prev_recalls and per_type_recalls:
-            for qtype in set(prev_recalls) | set(per_type_recalls):
-                per_type_impact[qtype] = round(
-                    per_type_recalls.get(qtype, 0.0) - prev_recalls.get(qtype, 0.0), 4
-                )
-        cfg_summary = {}
-        if latest_experiment:
-            cfg = latest_experiment.retrieval_config
-            cfg_summary = {
-                "strategy": cfg.strategy,
-                "top_k": cfg.top_k,
-                "use_reranker": cfg.use_reranker,
-            }
-            if cfg.strategy == "hybrid":
-                cfg_summary["bm25_weight"] = cfg.bm25_weight
-                cfg_summary["dense_weight"] = cfg.dense_weight
-        state["technique_registry"] = state.get("technique_registry", []) + [{
-            "technique": hypothesis_title,
-            "iteration": state["iteration"],
-            "accepted": latest.accepted,
-            "per_type_impact": per_type_impact,
-            "config_used": cfg_summary,
-        }]
-
-    if state.get("research_mode") == "karpathy":
-        if latest.accepted:
-            settings = get_settings()
-            if settings.karpathy_auto_reset_focus_after_accept:
-                if state.get("question_focus", "all") != "all":
-                    logger.info("Karpathy auto-focus: resetting to 'all' after acceptance")
-                state["question_focus"] = "all"
-            elif state.get("question_focus", "all") != "all":
-                logger.info(
-                    "Karpathy auto-focus: staying on '%s' after acceptance "
-                    "because KARPATHY_AUTO_RESET_FOCUS_AFTER_ACCEPT is false",
-                    state.get("question_focus"),
-                )
-        else:
-            code_hist = state.get("code_history", [])
-            consecutive_rejections = 0
-            for entry in reversed(code_hist):
-                if not entry.get("accepted"):
-                    consecutive_rejections += 1
-                else:
-                    break
-            if consecutive_rejections >= 2 and per_type_recalls:
-                weakest_type = min(per_type_recalls, key=per_type_recalls.get)  # type: ignore[arg-type]
-                if state.get("question_focus", "all") != weakest_type:
-                    logger.info(
-                        "Karpathy auto-focus: switching to '%s' after %d consecutive rejections",
-                        weakest_type, consecutive_rejections,
-                    )
-                state["question_focus"] = weakest_type
-            elif (
-                consecutive_rejections >= 2
-                and state.get("question_focus") in UNSCORED_RETRIEVAL_QUESTION_TYPES
-            ):
-                logger.info(
-                    "Karpathy auto-focus: resetting to 'all' because '%s' has no retrieval ground truth",
-                    state.get("question_focus"),
-                )
-                state["question_focus"] = "all"
-
     taxonomy = _classify_failures(latest.question_results, top_k, state.get("benchmark_root"))
     state["failure_taxonomy"] = taxonomy
     state["recommendation"] = _recommend_next_action(per_type_summary, taxonomy)
@@ -519,11 +419,6 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         )
 
     correctness = metrics.answer_correctness
-    focus_note = ""
-    current_focus = state.get("question_focus", "all")
-    if current_focus and current_focus != "all":
-        focus_note = f", auto_focus={current_focus}"
-
     parts = [
         f"Experiment {latest.experiment_id}",
         f"recall@k={metrics.recall_at_k:.3f}",
@@ -538,7 +433,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         f"holdout_delta={(latest.validation_delta or 0.0):.4f}" if latest.validation_delta is not None else "holdout_delta=n/a",
         f"accepted={latest.accepted}",
     ]
-    state["latest_summary"] = ", ".join(parts) + focus_note
+    state["latest_summary"] = ", ".join(parts)
 
     state["iteration"] += 1
     if state["iteration"] >= state["max_iterations"]:

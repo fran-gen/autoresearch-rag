@@ -1,37 +1,60 @@
-from src.agents.karpathy_worker import _benchmark_state_with_config, _sandbox_thread_env
-from src.models import RetrievalConfig
+from types import SimpleNamespace
+
+import pytest
+
+import src.agents.karpathy_worker as karpathy_worker
+from src.models import BenchmarkMetrics
 
 
-def _config(strategy: str, top_k: int) -> RetrievalConfig:
-    return RetrievalConfig(
-        strategy=strategy,
-        embedding_model="test-embedding",
-        top_k=top_k,
-        use_reranker=False,
+def test_docker_unavailable_falls_back_to_in_process(monkeypatch):
+    settings = SimpleNamespace(
+        karpathy_sandbox_enabled=True,
+        karpathy_sandbox_fallback_to_process=True,
     )
+    monkeypatch.setattr(karpathy_worker, "get_settings", lambda: settings)
+
+    def fail_docker(state, pipeline_code):
+        raise RuntimeError(
+            "Docker sandbox failed: Error while fetching server API version: "
+            "('Connection aborted.', FileNotFoundError(2, 'No such file or directory'))"
+        )
+
+    def run_in_process(state, pipeline_code):
+        return [], BenchmarkMetrics(total_questions=1, answered_questions=1)
+
+    monkeypatch.setattr(karpathy_worker, "_run_benchmark_in_docker", fail_docker)
+    monkeypatch.setattr(karpathy_worker, "_run_benchmark_isolated_in_process", run_in_process)
+
+    _, metrics = karpathy_worker._run_benchmark_for_code({}, "def retrieve(): pass")
+
+    assert metrics.total_questions == 1
 
 
-def test_benchmark_state_with_config_clears_candidate_config_for_incumbent():
-    incumbent_config = _config("dense", 6)
-    candidate_config = _config("hybrid", 12)
-    state = {
-        "best_config": incumbent_config,
-        "proposed_config": candidate_config,
-    }
+def test_sandbox_timeout_does_not_fall_back_to_in_process(monkeypatch):
+    settings = SimpleNamespace(
+        karpathy_sandbox_enabled=True,
+        karpathy_sandbox_fallback_to_process=True,
+    )
+    monkeypatch.setattr(karpathy_worker, "get_settings", lambda: settings)
 
-    benchmark_state = _benchmark_state_with_config(state, incumbent_config)
+    def fail_docker(state, pipeline_code):
+        raise RuntimeError("Sandbox timed out after 180s and was stopped.")
 
-    assert benchmark_state["proposed_config"] is None
-    assert benchmark_state["best_config"] == incumbent_config
-    assert state["proposed_config"] == candidate_config
+    def run_in_process(state, pipeline_code):
+        raise AssertionError("timeout failures should stay isolated to the sandbox")
+
+    monkeypatch.setattr(karpathy_worker, "_run_benchmark_in_docker", fail_docker)
+    monkeypatch.setattr(karpathy_worker, "_run_benchmark_isolated_in_process", run_in_process)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        karpathy_worker._run_benchmark_for_code({}, "def retrieve(): pass")
 
 
-def test_sandbox_thread_env_sets_cpu_bound_library_limits():
-    env = _sandbox_thread_env(2)
+def test_clean_log_excerpt_collapses_progress_bar_noise():
+    raw = "Loading weights:  0%|          | 0/103\rLoading weights: 100%|##########| 103/103\n"
 
-    assert env["OMP_NUM_THREADS"] == "2"
-    assert env["MKL_NUM_THREADS"] == "2"
-    assert env["OPENBLAS_NUM_THREADS"] == "2"
-    assert env["NUMEXPR_NUM_THREADS"] == "2"
-    assert env["VECLIB_MAXIMUM_THREADS"] == "2"
-    assert env["TOKENIZERS_PARALLELISM"] == "false"
+    cleaned = karpathy_worker._clean_log_excerpt(raw)
+
+    assert "\r" not in cleaned
+    assert "\n" not in cleaned
+    assert "Loading weights" in cleaned

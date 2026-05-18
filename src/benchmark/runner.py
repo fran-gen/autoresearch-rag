@@ -7,6 +7,7 @@ from pathlib import Path
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
+from src.agents.progress import report_progress
 from src.benchmark.loader import BenchmarkDocument, BenchmarkQuestion
 from src.benchmark.metrics import compute_retrieval_metrics
 from src.config import get_google_api_key, get_settings
@@ -56,6 +57,13 @@ class BenchmarkRunner:
         documents: list[BenchmarkDocument],
         config: RetrievalConfig,
     ) -> QdrantDenseRetriever | HybridRetriever:
+        report_progress(
+            "worker: loading retriever",
+            f"Loading {config.embedding_model} embeddings and attaching to the Qdrant index.",
+            strategy=config.strategy,
+            embedding_model=config.embedding_model,
+            document_count=len(documents),
+        )
         encoder = EmbeddingEncoder(config.embedding_model)
         dense = QdrantDenseRetriever(
             encoder=encoder,
@@ -67,19 +75,42 @@ class BenchmarkRunner:
         existing_dim = dense.collection_vector_size()
 
         if existing_dim is None:
+            report_progress(
+                "worker: building index",
+                "No compatible Qdrant collection found; building the dense index before retrieval.",
+                query_dim=query_dim,
+            )
             dense.build(records)
         elif existing_dim != query_dim:
+            report_progress(
+                "worker: rebuilding index",
+                "Qdrant vector dimensions changed; rebuilding the dense index before retrieval.",
+                query_dim=query_dim,
+                existing_dim=existing_dim,
+            )
             dense.build(records)
         else:
             dense.load()
 
         if config.strategy == "hybrid":
+            report_progress(
+                "worker: loading retriever",
+                "Dense index is ready; enabling hybrid BM25 plus vector retrieval.",
+                strategy=config.strategy,
+                bm25_weight=config.bm25_weight,
+                dense_weight=config.dense_weight,
+            )
             return HybridRetriever(
                 dense_retriever=dense,
                 records=records,
                 bm25_weight=config.bm25_weight,
                 dense_weight=config.dense_weight,
             )
+        report_progress(
+            "worker: loading retriever",
+            "Dense index is ready; starting vector retrieval.",
+            strategy=config.strategy,
+        )
         return dense
 
     def _answer_with_context(self, question: str, docs: list[RetrievedDocument]) -> str:
@@ -113,12 +144,13 @@ class BenchmarkRunner:
         return docs[0].text[:600]
 
     def _effective_top_k(self, question: BenchmarkQuestion, config: RetrievalConfig) -> int:
+        top_k_cap = max(1, self.settings.retrieve_top_k_cap)
         overrides = config.extra.get("question_type_overrides") if isinstance(config.extra, dict) else None
         if isinstance(overrides, dict):
             qtype_cfg = overrides.get(question.question_type or "unknown")
             if isinstance(qtype_cfg, dict) and isinstance(qtype_cfg.get("top_k"), (int, float)):
-                return max(1, min(30, int(qtype_cfg["top_k"])))
-        return config.top_k
+                return max(1, min(top_k_cap, int(qtype_cfg["top_k"])))
+        return max(1, min(top_k_cap, config.top_k))
 
     def _query_variants(self, question: BenchmarkQuestion, config: RetrievalConfig) -> list[str]:
         if not isinstance(config.extra, dict) or not config.extra.get("query_rewrite"):
@@ -164,7 +196,8 @@ class BenchmarkRunner:
                     by_doc[doc.document_id] = doc
         docs = sorted(by_doc.values(), key=lambda doc: doc.score, reverse=True)
         if reranker is not None:
-            docs = reranker.rerank(question.question, docs, top_k=max(top_k, len(docs)))
+            rerank_cap = max(top_k, self.settings.rerank_candidate_cap)
+            docs = reranker.rerank(question.question, docs[:rerank_cap], top_k=top_k)
         if isinstance(config.extra, dict) and config.extra.get("source_diversity"):
             docs = self._diversify_docs(docs, top_k)
         return docs[:top_k]
@@ -178,14 +211,26 @@ class BenchmarkRunner:
     ) -> tuple[list[QuestionResult], BenchmarkMetrics]:
         """Retrieval-only evaluation (no LLM answer generation)."""
         retriever = self._build_retriever(documents, retrieval_config)
-        reranker = (
-            CrossEncoderReranker(retrieval_config.reranker_model)
-            if retrieval_config.use_reranker and retrieval_config.reranker_model
-            else None
-        )
+        reranker = None
+        if retrieval_config.use_reranker and retrieval_config.reranker_model:
+            report_progress(
+                "worker: loading reranker",
+                f"Loading reranker {retrieval_config.reranker_model} before retrieval scoring.",
+                reranker_model=retrieval_config.reranker_model,
+            )
+            reranker = CrossEncoderReranker(retrieval_config.reranker_model)
 
         question_results: list[QuestionResult] = []
-        for question in questions:
+        total_questions = len(questions)
+        for index, question in enumerate(questions, start=1):
+            if index == 1 or index % 10 == 0 or index == total_questions:
+                report_progress(
+                    "worker: retrieving",
+                    f"Retrieving context for question {index}/{total_questions}.",
+                    question_index=index,
+                    question_count=total_questions,
+                    evaluation_mode="fast",
+                )
             start = time.perf_counter()
             docs = self._retrieve_question(retriever, question, retrieval_config, reranker)
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -235,14 +280,26 @@ class BenchmarkRunner:
         output_path: Path | None = None,
     ) -> tuple[list[QuestionResult], BenchmarkMetrics]:
         retriever = self._build_retriever(documents, retrieval_config)
-        reranker = (
-            CrossEncoderReranker(retrieval_config.reranker_model)
-            if retrieval_config.use_reranker and retrieval_config.reranker_model
-            else None
-        )
+        reranker = None
+        if retrieval_config.use_reranker and retrieval_config.reranker_model:
+            report_progress(
+                "worker: loading reranker",
+                f"Loading reranker {retrieval_config.reranker_model} before retrieval scoring.",
+                reranker_model=retrieval_config.reranker_model,
+            )
+            reranker = CrossEncoderReranker(retrieval_config.reranker_model)
 
         question_results: list[QuestionResult] = []
-        for question in questions:
+        total_questions = len(questions)
+        for index, question in enumerate(questions, start=1):
+            if index == 1 or index % 10 == 0 or index == total_questions:
+                report_progress(
+                    "worker: retrieving",
+                    f"Retrieving and answering question {index}/{total_questions}.",
+                    question_index=index,
+                    question_count=total_questions,
+                    evaluation_mode="full",
+                )
             start = time.perf_counter()
             docs = self._retrieve_question(retriever, question, retrieval_config, reranker)
             answer = self._answer_with_context(question.question, docs)

@@ -1,11 +1,8 @@
-import asyncio
-import json
+import pytest
 
-from src.agents.evaluator import _recommend_next_action
-from src.agents.evaluator import _build_per_type_breakdown
-from src.agents.evaluator import evaluator_agent
-from src.agents.graph import default_state
-from src.models import BenchmarkMetrics, ExperimentResult, ExperimentSpec, ExperimentStatus, QuestionResult
+import src.agents.evaluator as evaluator_module
+from src.agents.evaluator import evaluator_agent, _generate_final_report, _recommend_next_action
+from src.models import BenchmarkMetrics, ExperimentResult, ExperimentSpec, ExperimentStatus, RetrievalConfig
 
 
 def test_recommendation_for_missing_relevant_docs():
@@ -34,73 +31,114 @@ def test_recommendation_for_retrieval_noise():
     assert "noisy" in rec.lower() or "reranking" in rec.lower()
 
 
-def test_evaluator_accepts_any_positive_delta_by_default():
-    state = default_state(max_iterations=2)
-    config = state["best_config"]
-    assert config is not None
-    experiment = ExperimentSpec(
-        id="exp_small_win",
-        hypothesis_id="hyp_1",
-        name="small win",
-        description="small positive score lift",
-        retrieval_config=config,
-    )
-    result = ExperimentResult(
-        experiment_id=experiment.id,
-        status=ExperimentStatus.completed,
-        metrics=BenchmarkMetrics(total_questions=1, recall_at_k=0.3, precision_at_k=0.1),
-        composite_score=0.2826,
-        baseline_score=0.2792,
-        delta_vs_baseline=0.0034,
-    )
-    state["completed_experiments"] = [experiment]
-    state["results"] = [result]
-
-    updated = asyncio.run(evaluator_agent(state))
-
-    assert updated["results"][0].accepted is True
-    assert updated["accepted_experiments"] == 1
-    assert updated["rejected_experiments"] == 0
-    assert updated["best_score"] == 0.2826
-
-
-def test_per_type_breakdown_does_not_focus_unscored_info_not_found(tmp_path):
-    bench_dir = tmp_path / "bench"
-    bench_dir.mkdir()
-    questions = [
-        {
-            "question_id": "q1",
-            "question": "answerable",
-            "question_type": "basic",
-            "source_types": [],
-            "expected_doc_ids": ["doc1"],
-            "gold_answer": "",
-            "answer_facts": [],
-        },
-        {
-            "question_id": "q2",
-            "question": "not answerable",
-            "question_type": "info_not_found",
-            "source_types": [],
-            "expected_doc_ids": [],
-            "gold_answer": "",
-            "answer_facts": [],
-        },
-    ]
-    (bench_dir / "questions_subset.jsonl").write_text(
-        "\n".join(json.dumps(q) for q in questions),
-        encoding="utf-8",
+def _config() -> RetrievalConfig:
+    return RetrievalConfig(
+        strategy="dense",
+        embedding_model="test-model",
+        top_k=8,
+        use_reranker=False,
     )
 
-    summary, failures, recalls = _build_per_type_breakdown(
-        [
-            QuestionResult(question_id="q1", answer="", document_ids=["doc1"]),
-            QuestionResult(question_id="q2", answer="", document_ids=["doc2"]),
+
+def _state_for_result(iteration: int, delta: float) -> dict:
+    config = _config()
+    return {
+        "iteration": iteration,
+        "max_iterations": 5,
+        "should_stop": False,
+        "hypotheses": [],
+        "completed_experiments": [
+            ExperimentSpec(
+                id="exp_tie",
+                hypothesis_id="hyp_tie",
+                name="Tie",
+                description="Tie candidate",
+                retrieval_config=config,
+            )
         ],
-        top_k=5,
-        benchmark_root=str(tmp_path),
-    )
+        "results": [
+            ExperimentResult(
+                experiment_id="exp_tie",
+                status=ExperimentStatus.completed,
+                metrics=BenchmarkMetrics(total_questions=1, answered_questions=1),
+                composite_score=0.5 + delta,
+                baseline_score=0.5,
+                delta_vs_baseline=delta,
+                validation_score=0.5,
+                validation_delta=0.0,
+            )
+        ],
+        "latest_summary": "",
+        "best_config": config,
+        "best_score": 0.5,
+        "initial_baseline_score": 0.5,
+        "min_improvement_delta": 0.005,
+        "accepted_experiments": 0,
+        "rejected_experiments": 0,
+        "score_history": [],
+        "rejected_config_fingerprints": [],
+        "planner_rationale": "",
+        "research_mode": "config",
+        "benchmark_root": None,
+    }
 
-    assert recalls == {"basic": 1.0}
-    assert "info_not_found: skipped" in summary
-    assert [item["question_id"] for item in failures] == ["q1"]
+
+@pytest.mark.anyio
+async def test_second_experiment_accepts_equal_incumbent_score(monkeypatch):
+    monkeypatch.setattr(evaluator_module, "_build_per_type_breakdown", lambda *args: ("No per-type data.", []))
+    monkeypatch.setattr(evaluator_module, "_classify_failures", lambda *args: {})
+
+    state = await evaluator_agent(_state_for_result(iteration=1, delta=0.0))
+
+    assert state["accepted_experiments"] == 1
+    assert state["rejected_experiments"] == 0
+    assert state["results"][-1].accepted is True
+    assert "Accepted" in state["score_history"][-1]["reason"]
+
+
+@pytest.mark.anyio
+async def test_first_experiment_still_requires_min_delta(monkeypatch):
+    monkeypatch.setattr(evaluator_module, "_build_per_type_breakdown", lambda *args: ("No per-type data.", []))
+    monkeypatch.setattr(evaluator_module, "_classify_failures", lambda *args: {})
+
+    state = await evaluator_agent(_state_for_result(iteration=0, delta=0.0))
+
+    assert state["accepted_experiments"] == 0
+    assert state["rejected_experiments"] == 1
+    assert state["results"][-1].accepted is False
+    assert "by >= 0.0050" in state["score_history"][-1]["reason"]
+
+
+@pytest.mark.anyio
+async def test_final_report_handles_failed_results_without_delta(monkeypatch):
+    class Settings:
+        has_google_key = False
+
+    monkeypatch.setattr(evaluator_module, "get_settings", lambda: Settings())
+    state = {
+        "iteration": 3,
+        "accepted_experiments": 0,
+        "rejected_experiments": 3,
+        "initial_baseline_score": -1.0,
+        "best_score": -1.0,
+        "best_config": None,
+        "per_type_summary": "No per-type data.",
+        "results": [
+            ExperimentResult(
+                experiment_id="exp_failed",
+                status=ExperimentStatus.failed,
+                metrics=BenchmarkMetrics(),
+                composite_score=0.0,
+                baseline_score=None,
+                delta_vs_baseline=None,
+                accepted=False,
+                failure_analysis="Sandbox timeout.",
+            )
+        ],
+    }
+
+    report = await _generate_final_report(state)
+
+    assert "3 iterations" in report
+    assert "0 accepted" in report
+    assert "n/a" in report

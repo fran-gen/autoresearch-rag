@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import importlib.util
 import io
 import json
 import logging
+import re
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
 
+from src.agents.karpathy_validation import validate_karpathy_code
 from src.agents.state import ResearchLabState
 from src.benchmark.karpathy_sandbox import run_karpathy_benchmark
 from src.config import get_settings
@@ -31,86 +32,10 @@ SANDBOX_HF_HOME = "/app/.hf_cache"
 SANDBOX_DATA_ROOT = "/app/data"
 SANDBOX_QDRANT_PATH = "/app/index/qdrant_data"
 
-ALLOWED_IMPORTS = frozenset({
-    "src.retrieval.base",
-    "src.retrieval.embeddings",
-    "src.retrieval.reranker",
-    "src.benchmark.loader",
-    "re",
-    "math",
-    "statistics",
-    "collections",
-    "itertools",
-    "functools",
-    "__future__",
-})
-
-FORBIDDEN_MODULES = frozenset({
-    "os", "sys", "subprocess", "socket", "requests",
-    "urllib", "pathlib", "shutil", "http", "ftplib",
-    "smtplib", "ctypes", "multiprocessing",
-})
-
-
-def _validate_imports(code: str) -> str | None:
-    """Check that only allowed modules are imported. Returns error message or None."""
-    try:
-        tree = ast.parse(code)
-    except SyntaxError as e:
-        return f"SyntaxError: {e}"
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root_module = alias.name.split(".")[0]
-                if root_module in FORBIDDEN_MODULES:
-                    return f"Forbidden import: {alias.name}"
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                root_module = node.module.split(".")[0]
-                if root_module in FORBIDDEN_MODULES:
-                    return f"Forbidden import from: {node.module}"
-    return None
-
-
-def _validate_signature(code: str) -> str | None:
-    """Verify the retrieve() function exists with correct positional parameters.
-
-    Keyword-only args (encoder, reranker) are optional and not checked here.
-    """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError as e:
-        return f"SyntaxError: {e}"
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "retrieve":
-            arg_names = [arg.arg for arg in node.args.args]
-            if arg_names == ["question", "retriever", "top_k"]:
-                return None
-            return f"Wrong signature: retrieve({', '.join(arg_names)}). Expected (question, retriever, top_k)"
-    return "Missing retrieve() function"
-
 
 def _validate_code(code: str) -> str | None:
     """Run all validation checks. Returns error message or None on success."""
-    # 1. Syntax check
-    try:
-        compile(code, "pipeline.py", "exec")
-    except SyntaxError as e:
-        return f"SyntaxError: {e}"
-
-    # 2. Import check
-    err = _validate_imports(code)
-    if err:
-        return err
-
-    # 3. Signature check
-    err = _validate_signature(code)
-    if err:
-        return err
-
-    return None
+    return validate_karpathy_code(code)
 
 
 def _load_retrieve_function_from_code(code: str):
@@ -232,9 +157,10 @@ def _copy_hf_cache_if_needed(container, cache_mounted: bool) -> None:
     container.put_archive("/app", _tar_directory_bytes(source, arcname=".hf_cache"))
 
 
-def _sandbox_thread_env(thread_count: int) -> dict[str, str]:
+def _model_thread_env(thread_count: int) -> dict[str, str]:
     threads = str(max(1, thread_count))
     return {
+        "MODEL_INFERENCE_THREADS": threads,
         "OMP_NUM_THREADS": threads,
         "MKL_NUM_THREADS": threads,
         "OPENBLAS_NUM_THREADS": threads,
@@ -244,12 +170,42 @@ def _sandbox_thread_env(thread_count: int) -> dict[str, str]:
     }
 
 
+def _sandbox_thread_env(thread_count: int) -> dict[str, str]:
+    return _model_thread_env(thread_count)
+
+
+def _clean_log_excerpt(text: str, limit: int = 1200) -> str:
+    text = text.replace("\r", "\n")
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    excerpt = " | ".join(lines)
+    excerpt = re.sub(r"\s+", " ", excerpt).strip()
+    return excerpt[-limit:] if len(excerpt) > limit else excerpt
+
+
 def _container_logs_tail(container, limit: int = 2000) -> str:
     try:
         logs = container.logs(stdout=True, stderr=True, tail=80)
-        return logs.decode("utf-8", errors="replace")[-limit:]
+        return _clean_log_excerpt(logs.decode("utf-8", errors="replace"), limit=limit)
     except Exception as exc:
         return f"<unable to read sandbox logs: {exc}>"
+
+
+def _is_docker_unavailable_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "docker sdk is not installed" in text:
+        return True
+    if "error while fetching server api version" in text:
+        return True
+    if "docker daemon" in text and "permission denied" in text:
+        return True
+
+    socket_markers = (
+        "no such file or directory",
+        "connection aborted",
+        "permission denied",
+    )
+    return "docker sandbox failed" in text and any(marker in text for marker in socket_markers)
 
 
 def _run_benchmark_in_docker(
@@ -264,7 +220,7 @@ def _run_benchmark_in_docker(
         raise RuntimeError("Docker SDK is not installed. Install the 'docker' package.") from exc
 
     payload = _sandbox_payload(state)
-    client = docker.from_env()
+    client = None
     container = None
     volumes = {}
     hf_cache_host_path = settings.karpathy_hf_cache_host_path.strip()
@@ -290,12 +246,13 @@ def _run_benchmark_in_docker(
         "HF_HUB_CACHE": f"{SANDBOX_HF_HOME}/hub",
         "TRANSFORMERS_CACHE": SANDBOX_HF_HOME,
     }
-    environment.update(_sandbox_thread_env(settings.karpathy_sandbox_threads))
+    environment.update(_model_thread_env(settings.karpathy_sandbox_threads))
     if settings.karpathy_sandbox_network_disabled:
         environment["HF_HUB_OFFLINE"] = "1"
         environment["TRANSFORMERS_OFFLINE"] = "1"
 
     try:
+        client = docker.from_env()
         try:
             create_kwargs = {
                 "image": settings.karpathy_sandbox_image,
@@ -312,9 +269,7 @@ def _run_benchmark_in_docker(
                 "volumes": volumes or None,
             }
             if settings.karpathy_sandbox_cpus > 0:
-                create_kwargs["nano_cpus"] = int(
-                    settings.karpathy_sandbox_cpus * 1_000_000_000
-                )
+                create_kwargs["nano_cpus"] = int(settings.karpathy_sandbox_cpus * 1_000_000_000)
             container = client.containers.create(**create_kwargs)
         except ImageNotFound as exc:
             raise RuntimeError(
@@ -342,31 +297,29 @@ def _run_benchmark_in_docker(
         except Exception as exc:
             logs = _container_logs_tail(container)
             raise RuntimeError(
-                "Sandbox exceeded "
-                f"KARPATHY_SANDBOX_TIMEOUT_SECONDS="
-                f"{settings.karpathy_sandbox_timeout_seconds}s while waiting for "
-                "benchmark results. This usually means the candidate pipeline was "
-                "CPU-bound, often from cross-encoder reranking too many candidates "
-                "or running the full benchmark. Last logs: "
-                f"{logs}"
+                "Sandbox timed out after "
+                f"{settings.karpathy_sandbox_timeout_seconds}s and was stopped. "
+                "The candidate may be too slow or may call retrieve too many times. "
+                f"Last logs: {logs or 'none'}"
             ) from exc
         logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
+        clean_logs = _clean_log_excerpt(logs)
         status_code = exit_result.get("StatusCode", 1) if isinstance(exit_result, dict) else 1
         if status_code != 0:
             if status_code == 137:
                 raise RuntimeError(
-                    "Sandbox exited with 137, which usually means Docker killed it for "
-                    f"memory pressure. Current KARPATHY_SANDBOX_MEMORY="
-                    f"{settings.karpathy_sandbox_memory}. Last logs: {logs[-1200:]}"
+                    "Sandbox exited with 137 (killed by Docker, commonly timeout or "
+                    f"memory pressure). Current KARPATHY_SANDBOX_MEMORY="
+                    f"{settings.karpathy_sandbox_memory}. Last logs: {clean_logs or 'none'}"
                 )
-            raise RuntimeError(f"Sandbox exited with {status_code}: {logs[-1200:]}")
+            raise RuntimeError(f"Sandbox exited with {status_code}: {clean_logs or 'no logs'}")
 
         result_line = next(
             (line[len(RESULT_PREFIX):] for line in reversed(logs.splitlines()) if line.startswith(RESULT_PREFIX)),
             "",
         )
         if not result_line:
-            raise RuntimeError(f"Sandbox did not emit a result payload: {logs[-1200:]}")
+            raise RuntimeError(f"Sandbox did not emit a result payload: {clean_logs or 'no logs'}")
         result_payload = json.loads(result_line)
         question_results = [
             QuestionResult.model_validate(item)
@@ -404,25 +357,21 @@ def _run_benchmark_for_code(
 ) -> tuple[list[QuestionResult], BenchmarkMetrics]:
     settings = get_settings()
     if settings.karpathy_sandbox_enabled:
-        return _run_benchmark_in_docker(state, pipeline_code)
+        try:
+            return _run_benchmark_in_docker(state, pipeline_code)
+        except RuntimeError as exc:
+            if (
+                settings.karpathy_sandbox_fallback_to_process
+                and _is_docker_unavailable_error(exc)
+            ):
+                logger.warning(
+                    "Docker sandbox unavailable; falling back to in-process Karpathy "
+                    "benchmark: %s",
+                    exc,
+                )
+                return _run_benchmark_isolated_in_process(state, pipeline_code)
+            raise
     return _run_benchmark_isolated_in_process(state, pipeline_code)
-
-
-def _benchmark_state_with_config(
-    state: ResearchLabState,
-    config: RetrievalConfig | None,
-) -> ResearchLabState:
-    """Return a shallow state copy whose benchmark config is explicit.
-
-    Karpathy benchmark payloads prefer `proposed_config` over `best_config`.
-    Incumbent evaluations therefore must clear `proposed_config`, otherwise
-    the old pipeline code is measured with the new candidate config.
-    """
-    benchmark_state = dict(state)
-    benchmark_state["proposed_config"] = None
-    if config is not None:
-        benchmark_state["best_config"] = config
-    return benchmark_state  # type: ignore[return-value]
 
 
 def _failed_result(
@@ -469,63 +418,25 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
         state["latest_summary"] = f"Code validation failed: {validation_error}"
         return state
 
-    # Step 2: Collect all valid candidates (primary + extras from best-of-N).
-    all_candidates = [{"code": proposed_code, "config": state.get("proposed_config")}]
-    for extra in state.get("proposed_candidates", []):
-        extra_code = extra.get("code", "")
-        if extra_code and _validate_code(extra_code) is None:
-            cfg = extra.get("config")
-            if isinstance(cfg, dict):
-                cfg = RetrievalConfig.model_validate(cfg)
-            all_candidates.append({"code": extra_code, "config": cfg})
-
-    # Step 3: Evaluate all candidates and pick the best.
-    from src.benchmark.metrics import composite_score as calc_score
-
-    best_qr: list[QuestionResult] | None = None
-    best_metrics: BenchmarkMetrics | None = None
-    best_score = -1.0
-    best_candidate_code = proposed_code
-    best_candidate_config = state.get("proposed_config")
-    candidate_failures: list[str] = []
-
-    for i, cand in enumerate(all_candidates):
-        cand_code = cand["code"]
-        eval_state = _benchmark_state_with_config(state, cand.get("config"))
-        eval_state["proposed_config"] = cand.get("config")
-        try:
-            qr, m = await asyncio.to_thread(
-                _run_benchmark_for_code, eval_state, cand_code
-            )
-        except Exception as exc:
-            logger.warning("Candidate %d/%d benchmark failed: %s", i + 1, len(all_candidates), exc)
-            candidate_failures.append(f"Candidate {i + 1}/{len(all_candidates)} failed: {exc}")
-            continue
-        if m.total_questions <= 0 or not qr:
-            candidate_failures.append(
-                f"Candidate {i + 1}/{len(all_candidates)} returned no benchmark results."
-            )
-            continue
-        score = calc_score(m)
-        logger.info(
-            "Candidate %d/%d score=%.4f run_id=%s",
-            i + 1, len(all_candidates), score, state.get("run_id"),
+    # Step 2: Run benchmark with the proposed session pipeline.
+    try:
+        question_results, metrics = await asyncio.to_thread(
+            _run_benchmark_for_code, state, proposed_code
         )
-        if score > best_score:
-            best_score = score
-            best_qr = qr
-            best_metrics = m
-            best_candidate_code = cand_code
-            best_candidate_config = cand.get("config")
+    except Exception as exc:
+        logger.error("Sandbox benchmark run failed: %s", exc)
+        result = _failed_result(state, experiment.id, f"Sandbox benchmark failed: {exc}")
+        state["results"] = state["results"] + [result]
+        state["completed_experiments"] = state["completed_experiments"] + [experiment]
+        state["experiment_queue"] = state["experiment_queue"][1:]
+        state["latest_summary"] = f"Sandbox benchmark failed: {exc}"
+        return state
 
-    if best_qr is None or best_metrics is None:
-        failure_reason = "All candidates failed benchmark evaluation."
-        if candidate_failures:
-            failure_reason = f"{failure_reason} {' | '.join(candidate_failures[:3])}"
+    if metrics.total_questions <= 0 or not question_results:
         result = _failed_result(
             state,
             experiment.id,
-            failure_reason,
+            "Benchmark returned zero questions. Check sandbox data and benchmark_root mounts.",
         )
         state["results"] = state["results"] + [result]
         state["completed_experiments"] = state["completed_experiments"] + [experiment]
@@ -533,32 +444,23 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
         state["latest_summary"] = result.failure_analysis
         return state
 
-    state["proposed_code"] = best_candidate_code
-    if best_candidate_config is not None:
-        state["proposed_config"] = best_candidate_config
-
-    question_results = best_qr
-    metrics = best_metrics
-    candidate_score = best_score
-
-    # Step 4: Also run the incumbent session code for first-iteration A/B comparison.
+    # Step 3: Also run the incumbent session code for first-iteration A/B comparison.
     incumbent_code = state.get("current_pipeline_code", "")
     incumbent_score = state.get("best_score", -1.0)
-    incumbent_config = state.get("best_config")
 
     if incumbent_code and incumbent_score < 0:
         try:
-            incumbent_state = _benchmark_state_with_config(
-                state,
-                incumbent_config if isinstance(incumbent_config, RetrievalConfig) else None,
-            )
             _, incumbent_metrics = await asyncio.to_thread(
-                _run_benchmark_for_code, incumbent_state, incumbent_code
+                _run_benchmark_for_code, state, incumbent_code
             )
+            from src.benchmark.metrics import composite_score as calc_score
             incumbent_score = calc_score(incumbent_metrics)
         except Exception as exc:
             logger.warning("Incumbent benchmark failed; using current best score: %s", exc)
             incumbent_score = state.get("best_score", 0.0)
+
+    from src.benchmark.metrics import composite_score as calc_score
+    candidate_score = calc_score(metrics)
 
     result = ExperimentResult(
         experiment_id=experiment.id,

@@ -1172,12 +1172,29 @@ body::after {
 }
 
 .research-step-card--compact {
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 1fr;
   align-items: center;
   min-height: 4.55rem;
-  padding: 0.72rem;
+  padding: 0.78rem 0.72rem 0.72rem;
+  overflow: hidden;
   gap: 0.55rem;
   animation: overview-rise .45s ease both;
+}
+
+.research-step-card__selection {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding-right: 2.6rem;
+  cursor: pointer;
+}
+
+.research-step-card__content {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
 }
 
 .research-step-card--compact .research-step-card__number {
@@ -1196,10 +1213,67 @@ body::after {
   line-height: 1.2;
 }
 
+.research-step-card--compact .help-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1.42rem;
+  height: 1.42rem;
+  border-width: 0 1px 1px 0;
+  border-color: rgba(255, 255, 255, .12);
+  border-top-left-radius: var(--radius-sm);
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0.55rem;
+  border-bottom-left-radius: 0;
+  background: rgba(255, 255, 255, .08);
+  color: #fff;
+  font-size: 0.62rem;
+  z-index: 3;
+}
+
+.research-step-card--compact .help-tooltip:hover,
+.research-step-card--compact .help-tooltip:focus {
+  border-color: rgba(255, 255, 255, .22);
+  background: rgba(255, 255, 255, .14);
+}
+
 .research-step-card--compact .tag {
-  grid-column: 2;
   justify-self: start;
   font-size: 0.66rem;
+}
+
+.research-step-card__preview {
+  position: absolute;
+  top: 0;
+  right: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 1.42rem;
+  min-height: 1.42rem;
+  padding: 0.1rem 0.38rem;
+  box-sizing: border-box;
+  border-color: rgba(255, 81, 107, .58);
+  border-width: 0 0 1px 1px;
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0.55rem;
+  border-top-left-radius: 0;
+  background: rgba(255, 81, 107, .2) !important;
+  color: #ffb3bf !important;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  box-shadow: none;
+}
+
+.research-step-card__preview:hover {
+  border-color: rgba(255, 81, 107, .58);
+  background: rgba(255, 81, 107, .18) !important;
+  color: #fff !important;
 }
 
 .dataset-source-card {
@@ -1349,6 +1423,65 @@ body::after {
   color: var(--text-secondary);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.question-preview-modal-card {
+  position: relative;
+  width: min(44rem, calc(100vw - 2rem));
+}
+
+.question-preview-modal-card .modal-card-head {
+  padding-right: 3rem !important;
+}
+
+.question-preview-modal-card .delete {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+.question-preview-modal-body {
+  display: grid;
+  gap: 1rem;
+}
+
+.question-preview-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.question-preview-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.question-preview-item {
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 0.95rem;
+  background: rgba(15, 17, 23, .46);
+}
+
+.question-preview-item__top {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+.question-preview-item__question {
+  margin: 0;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.question-preview-item__meta {
+  margin: 0.55rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
 }
 
 .research-dataset-card {
@@ -2919,6 +3052,65 @@ body::after {
 .config-modal-card .code-panel {
   max-height: none;
   white-space: pre;
+}
+
+.api-key-required-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.api-key-required-modal.is-active {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.api-key-required-modal .modal-background {
+  background:
+    radial-gradient(circle at 50% 30%, rgba(220, 36, 76, .2), transparent 24rem),
+    rgba(4, 6, 12, .72);
+  backdrop-filter: blur(12px);
+}
+
+.api-key-required-modal-card {
+  width: min(32rem, calc(100vw - 2rem));
+  margin: auto;
+}
+
+.api-key-required-modal-card .modal-card-foot {
+  background: linear-gradient(135deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .015));
+  border-top: 1px solid var(--surface-border);
+  padding-block: 0.85rem;
+}
+
+.api-key-required-modal__copy {
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.api-key-required-modal__copy strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.api-key-required-modal__footer {
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.api-key-required-modal__footer .button.is-light {
+  border-color: var(--surface-border);
+  background: rgba(255, 255, 255, .06);
+  color: var(--text-on-dark);
+}
+
+.api-key-required-modal__footer .button.is-light:hover,
+.api-key-required-modal__footer .button.is-light:focus {
+  border-color: rgba(255, 255, 255, .24);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
 }
 
 /* ── Config pills ─────────────────────────────────────────────────── */
@@ -4543,12 +4735,11 @@ details[open] summary {
   }
 
   .research-step-card--compact {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: 1fr;
   }
 
-  .research-step-card--compact .tag {
-    grid-column: 2;
-    justify-self: start;
+  .research-step-card__preview {
+    width: auto;
   }
 
   .experiment-metric-grid,

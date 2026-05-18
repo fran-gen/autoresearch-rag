@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 
@@ -5,7 +6,10 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-_runtime_google_api_key = ""
+_runtime_google_api_key: ContextVar[str] = ContextVar(
+    "runtime_google_api_key",
+    default="",
+)
 
 
 class Settings(BaseSettings):
@@ -38,10 +42,17 @@ class Settings(BaseSettings):
         alias="EXPERIMENT_DB_PATH",
     )
     default_top_k: int = Field(default=8, alias="DEFAULT_TOP_K")
+    model_inference_threads: int = Field(default=1, alias="MODEL_INFERENCE_THREADS")
+    retrieve_top_k_cap: int = Field(default=24, alias="RETRIEVE_TOP_K_CAP")
+    rerank_candidate_cap: int = Field(default=24, alias="RERANK_CANDIDATE_CAP")
 
     # Karpathy mode: when False (default), only `git add` pipeline.py after a run; when True, also commit.
     karpathy_pipeline_commit: bool = Field(default=False, alias="KARPATHY_PIPELINE_COMMIT")
     karpathy_sandbox_enabled: bool = Field(default=True, alias="KARPATHY_SANDBOX_ENABLED")
+    karpathy_sandbox_fallback_to_process: bool = Field(
+        default=True,
+        alias="KARPATHY_SANDBOX_FALLBACK_TO_PROCESS",
+    )
     karpathy_sandbox_image: str = Field(
         default="hackathon-lab-app:latest",
         alias="KARPATHY_SANDBOX_IMAGE",
@@ -51,11 +62,16 @@ class Settings(BaseSettings):
         alias="KARPATHY_SANDBOX_TIMEOUT_SECONDS",
     )
     karpathy_sandbox_memory: str = Field(default="3g", alias="KARPATHY_SANDBOX_MEMORY")
-    karpathy_sandbox_cpus: float = Field(default=2.0, alias="KARPATHY_SANDBOX_CPUS")
-    karpathy_sandbox_threads: int = Field(default=2, alias="KARPATHY_SANDBOX_THREADS")
+    karpathy_sandbox_cpus: float = Field(default=1.0, alias="KARPATHY_SANDBOX_CPUS")
+    karpathy_sandbox_threads: int = Field(default=1, alias="KARPATHY_SANDBOX_THREADS")
     karpathy_sandbox_network_disabled: bool = Field(
         default=True,
         alias="KARPATHY_SANDBOX_NETWORK_DISABLED",
+    )
+    karpathy_max_questions: int = Field(default=24, alias="KARPATHY_MAX_QUESTIONS")
+    karpathy_retrieve_calls_per_question: int = Field(
+        default=4,
+        alias="KARPATHY_RETRIEVE_CALLS_PER_QUESTION",
     )
     karpathy_hf_cache_host_path: str = Field(
         default="",
@@ -69,22 +85,6 @@ class Settings(BaseSettings):
         default="",
         alias="KARPATHY_QDRANT_HOST_PATH",
     )
-    karpathy_num_candidates: int = Field(
-        default=1,
-        alias="KARPATHY_NUM_CANDIDATES",
-    )
-    karpathy_retrieve_top_k_cap: int = Field(
-        default=24,
-        alias="KARPATHY_RETRIEVE_TOP_K_CAP",
-    )
-    karpathy_rerank_candidate_cap: int = Field(
-        default=24,
-        alias="KARPATHY_RERANK_CANDIDATE_CAP",
-    )
-    karpathy_auto_reset_focus_after_accept: bool = Field(
-        default=False,
-        alias="KARPATHY_AUTO_RESET_FOCUS_AFTER_ACCEPT",
-    )
 
     @property
     def has_google_key(self) -> bool:
@@ -92,12 +92,14 @@ class Settings(BaseSettings):
 
 
 def set_runtime_google_api_key(api_key: str) -> None:
-    global _runtime_google_api_key
-    _runtime_google_api_key = api_key.strip()
+    _runtime_google_api_key.set(api_key.strip())
 
 
 def get_google_api_key() -> str:
-    return _runtime_google_api_key or get_settings().google_api_key.strip()
+    runtime_key = _runtime_google_api_key.get().strip()
+    if runtime_key:
+        return runtime_key
+    return get_settings().google_api_key.strip()
 
 
 @lru_cache(maxsize=1)
