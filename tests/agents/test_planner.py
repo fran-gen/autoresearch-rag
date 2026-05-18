@@ -1,4 +1,5 @@
 from src.agents.code_planner import _candidate_models as _karpathy_candidate_models
+from src.agents.code_planner import _select_fallback_candidate
 from src.agents.planner import _parse_config_from_llm, _random_fallback
 from src.models import RetrievalConfig
 
@@ -54,3 +55,21 @@ def test_karpathy_code_planner_prefers_full_model_before_fast_model():
     models = _karpathy_candidate_models("gemini-pro", "gemini-flash")
 
     assert models[:2] == ["gemini-pro", "gemini-flash"]
+
+
+def test_karpathy_fallback_moves_config_when_code_repeats():
+    base = _base_config()
+    state = {
+        "current_pipeline_code": "def retrieve():\n    pass\n",
+        "code_history": [],
+    }
+
+    code, config, rationale = _select_fallback_candidate(
+        state,
+        base,
+        state["current_pipeline_code"],
+    )
+
+    assert code.strip() != state["current_pipeline_code"].strip()
+    assert config.top_k != base.top_k or config.use_reranker != base.use_reranker
+    assert rationale

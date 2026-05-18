@@ -17,6 +17,7 @@ from src.config import get_google_api_key, get_settings
 from src.models import ExperimentStatus, QuestionResult
 
 logger = logging.getLogger(__name__)
+UNSCORED_RETRIEVAL_QUESTION_TYPES = frozenset({"info_not_found"})
 
 
 def _config_fingerprint_from_dict(config: dict) -> str:
@@ -49,6 +50,7 @@ def _build_per_type_breakdown(
     type_recalls: dict[str, list[float]] = defaultdict(list)
     type_precisions: dict[str, list[float]] = defaultdict(list)
     type_counts: dict[str, int] = defaultdict(int)
+    unscored_type_counts: dict[str, int] = defaultdict(int)
     scored: list[tuple[float, dict]] = []
 
     for result in question_results:
@@ -56,11 +58,12 @@ def _build_per_type_breakdown(
         if q is None:
             continue
         qtype = q.question_type or "unknown"
-        type_counts[qtype] += 1
         gt = set(q.expected_doc_ids) if q.expected_doc_ids else set()
-        pred = set(result.document_ids[:top_k])
         if not gt:
+            unscored_type_counts[qtype] += 1
             continue
+        type_counts[qtype] += 1
+        pred = set(result.document_ids[:top_k])
         recall = len(pred & gt) / len(gt)
         precision = len(pred & gt) / len(pred) if pred else 0.0
         type_recalls[qtype].append(recall)
@@ -104,6 +107,18 @@ def _build_per_type_breakdown(
         avg_p = sum(precs) / max(len(precs), 1)
         per_type_recall_avgs[qtype] = avg_r
         lines.append(f"{qtype}: recall={avg_r:.3f} precision={avg_p:.3f} ({n}q)")
+    for qtype in sorted(
+        unscored_type_counts,
+        key=lambda t: unscored_type_counts[t],
+        reverse=True,
+    ):
+        n = unscored_type_counts[qtype]
+        if qtype in UNSCORED_RETRIEVAL_QUESTION_TYPES:
+            lines.append(
+                f"{qtype}: skipped in retrieval-only scoring ({n}q without expected docs)"
+            )
+        else:
+            lines.append(f"{qtype}: no retrieval ground truth ({n}q)")
 
     per_type_summary = " | ".join(lines) if lines else "No per-type data."
     scored.sort(key=lambda x: x[0])
@@ -299,7 +314,8 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
             else latest.composite_score
         )
 
-    threshold_ok = current_best < 0 or delta >= min_delta
+    required_delta = max(min_delta, 1e-12)
+    threshold_ok = current_best < 0 or delta > required_delta
     improved = completed_ok and threshold_ok and validation_ok
     verdict_reason = "Accepted."
     if improved and latest_experiment is not None:
@@ -323,7 +339,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         elif not threshold_ok:
             verdict_reason = (
                 f"Rejected: score {latest.composite_score:.4f} did not exceed "
-                f"baseline {current_best:.4f} by >= {min_delta:.4f} "
+                f"baseline {current_best:.4f} by > {min_delta:.4f} "
                 f"(delta {delta:.4f})."
             )
         else:
@@ -353,6 +369,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
     state["score_history"] = state.get("score_history", []) + [{
         "iteration": state["iteration"],
         "experiment_id": latest.experiment_id,
+        "status": latest.status.value,
         "score": round(latest.composite_score, 4),
         "baseline": round(history_baseline, 4) if history_baseline is not None else None,
         "validation_score": round(latest.validation_score, 4) if latest.validation_score is not None else None,
@@ -455,9 +472,17 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
 
     if state.get("research_mode") == "karpathy":
         if latest.accepted:
-            if state.get("question_focus", "all") != "all":
-                logger.info("Karpathy auto-focus: resetting to 'all' after acceptance")
-            state["question_focus"] = "all"
+            settings = get_settings()
+            if settings.karpathy_auto_reset_focus_after_accept:
+                if state.get("question_focus", "all") != "all":
+                    logger.info("Karpathy auto-focus: resetting to 'all' after acceptance")
+                state["question_focus"] = "all"
+            elif state.get("question_focus", "all") != "all":
+                logger.info(
+                    "Karpathy auto-focus: staying on '%s' after acceptance "
+                    "because KARPATHY_AUTO_RESET_FOCUS_AFTER_ACCEPT is false",
+                    state.get("question_focus"),
+                )
         else:
             code_hist = state.get("code_history", [])
             consecutive_rejections = 0
@@ -474,6 +499,15 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
                         weakest_type, consecutive_rejections,
                     )
                 state["question_focus"] = weakest_type
+            elif (
+                consecutive_rejections >= 2
+                and state.get("question_focus") in UNSCORED_RETRIEVAL_QUESTION_TYPES
+            ):
+                logger.info(
+                    "Karpathy auto-focus: resetting to 'all' because '%s' has no retrieval ground truth",
+                    state.get("question_focus"),
+                )
+                state["question_focus"] = "all"
 
     taxonomy = _classify_failures(latest.question_results, top_k, state.get("benchmark_root"))
     state["failure_taxonomy"] = taxonomy

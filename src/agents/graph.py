@@ -126,7 +126,7 @@ def default_state(
         "latest_summary": "",
         "best_config": baseline_config,
         "best_score": -1.0,
-        "min_improvement_delta": 0.005,
+        "min_improvement_delta": 0.0,
         "accepted_experiments": 0,
         "rejected_experiments": 0,
         "per_type_summary": "",
