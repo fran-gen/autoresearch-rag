@@ -113,12 +113,13 @@ class BenchmarkRunner:
         return docs[0].text[:600]
 
     def _effective_top_k(self, question: BenchmarkQuestion, config: RetrievalConfig) -> int:
+        top_k_cap = max(1, self.settings.retrieve_top_k_cap)
         overrides = config.extra.get("question_type_overrides") if isinstance(config.extra, dict) else None
         if isinstance(overrides, dict):
             qtype_cfg = overrides.get(question.question_type or "unknown")
             if isinstance(qtype_cfg, dict) and isinstance(qtype_cfg.get("top_k"), (int, float)):
-                return max(1, min(30, int(qtype_cfg["top_k"])))
-        return config.top_k
+                return max(1, min(top_k_cap, int(qtype_cfg["top_k"])))
+        return max(1, min(top_k_cap, config.top_k))
 
     def _query_variants(self, question: BenchmarkQuestion, config: RetrievalConfig) -> list[str]:
         if not isinstance(config.extra, dict) or not config.extra.get("query_rewrite"):
@@ -164,7 +165,8 @@ class BenchmarkRunner:
                     by_doc[doc.document_id] = doc
         docs = sorted(by_doc.values(), key=lambda doc: doc.score, reverse=True)
         if reranker is not None:
-            docs = reranker.rerank(question.question, docs, top_k=max(top_k, len(docs)))
+            rerank_cap = max(top_k, self.settings.rerank_candidate_cap)
+            docs = reranker.rerank(question.question, docs[:rerank_cap], top_k=top_k)
         if isinstance(config.extra, dict) and config.extra.get("source_diversity"):
             docs = self._diversify_docs(docs, top_k)
         return docs[:top_k]

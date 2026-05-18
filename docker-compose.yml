@@ -3,14 +3,26 @@ services:
     image: hackathon-lab-app:latest
     build: .
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8001
+    cpus: "${API_CPUS:-1.5}"
     env_file:
       - .env
     environment:
+      - MODEL_INFERENCE_THREADS=${MODEL_INFERENCE_THREADS:-1}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
+      - VECLIB_MAXIMUM_THREADS=${VECLIB_MAXIMUM_THREADS:-1}
+      - TOKENIZERS_PARALLELISM=false
+      - RETRIEVE_TOP_K_CAP=${RETRIEVE_TOP_K_CAP:-24}
+      - RERANK_CANDIDATE_CAP=${RERANK_CANDIDATE_CAP:-24}
       - KARPATHY_SANDBOX_IMAGE=hackathon-lab-app:latest
       - KARPATHY_HF_CACHE_HOST_PATH=${PWD}/.hf_cache
       - KARPATHY_DATA_HOST_PATH=${PWD}/data
       - KARPATHY_QDRANT_HOST_PATH=${PWD}/index/qdrant_data
       - KARPATHY_SANDBOX_MEMORY=3g
+      - KARPATHY_SANDBOX_CPUS=${KARPATHY_SANDBOX_CPUS:-0.5}
+      - KARPATHY_SANDBOX_THREADS=${KARPATHY_SANDBOX_THREADS:-1}
       - QDRANT_PATH=/app/index/qdrant_data
     volumes:
       - ./:/app
@@ -45,4 +57,3 @@ services:
 
 volumes:
   flask_sessions:
-

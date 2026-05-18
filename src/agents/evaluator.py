@@ -124,6 +124,14 @@ def _recommend_next_action(per_type_summary: str, taxonomy: dict[str, int]) -> s
     return f"Continue tuning from the per-type breakdown: {per_type_summary or 'no per-type data yet.'}"
 
 
+def _format_score(value: float | None) -> str:
+    return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
+def _format_signed_score(value: float | None) -> str:
+    return f"{value:+.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
 async def _generate_final_report(state: ResearchLabState) -> str:
     """Ask the LLM for a synthesis of the research session."""
     settings = get_settings()
@@ -137,17 +145,25 @@ async def _generate_final_report(state: ResearchLabState) -> str:
     for r in results:
         verdict = "ACCEPTED" if r.accepted else "REJECTED"
         history_lines.append(
-            f"  {r.experiment_id}: score={r.composite_score:.4f} "
-            f"delta={r.delta_vs_baseline:.4f} [{verdict}]"
+            f"  {r.experiment_id}: score={_format_score(r.composite_score)} "
+            f"delta={_format_signed_score(r.delta_vs_baseline)} [{verdict}]"
         )
+
+    improvement = best - initial if best >= 0 and initial >= 0 else None
+    improvement_pct = (
+        (improvement / max(initial, 0.001)) * 100
+        if improvement is not None and initial > 0
+        else None
+    )
 
     prompt = (
         "You are a research assistant summarizing an automated RAG optimization session.\n\n"
         f"## Session stats\n"
         f"- Iterations: {state['iteration']}\n"
-        f"- Initial baseline score: {initial:.4f}\n"
-        f"- Final best score: {best:.4f}\n"
-        f"- Improvement: {best - initial:.4f} ({((best - initial) / max(initial, 0.001)) * 100:.1f}%)\n"
+        f"- Initial baseline score: {_format_score(initial if initial >= 0 else None)}\n"
+        f"- Final best score: {_format_score(best if best >= 0 else None)}\n"
+        f"- Improvement: {_format_signed_score(improvement)} "
+        f"({f'{improvement_pct:+.1f}%' if improvement_pct is not None else 'n/a'})\n"
         f"- Accepted: {state['accepted_experiments']}, Rejected: {state['rejected_experiments']}\n\n"
         f"## Experiment history\n{''.join(history_lines) if history_lines else 'None'}\n\n"
         f"## Final per-type performance\n{state.get('per_type_summary', 'N/A')}\n\n"
@@ -175,15 +191,17 @@ async def _generate_final_report(state: ResearchLabState) -> str:
 def _fallback_report(state: ResearchLabState) -> str:
     initial = state.get("initial_baseline_score", -1.0)
     best = state.get("best_score", -1.0)
-    delta = best - initial if initial >= 0 else 0.0
-    pct = (delta / max(initial, 0.001)) * 100
+    delta = best - initial if initial >= 0 and best >= 0 else None
+    pct = (delta / max(initial, 0.001)) * 100 if delta is not None and initial > 0 else None
 
     return (
         f"Research session completed: {state['iteration']} iterations, "
         f"{state['accepted_experiments']} accepted, "
         f"{state['rejected_experiments']} rejected.\n\n"
-        f"Score improved from {initial:.4f} to {best:.4f} "
-        f"(+{delta:.4f}, +{pct:.1f}%).\n\n"
+        f"Score changed from {_format_score(initial if initial >= 0 else None)} "
+        f"to {_format_score(best if best >= 0 else None)} "
+        f"({_format_signed_score(delta)}, "
+        f"{f'{pct:+.1f}%' if pct is not None else 'n/a'}).\n\n"
         f"Remaining weak areas: {state.get('per_type_summary', 'N/A')}"
     )
 
@@ -368,6 +386,8 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
             "hypothesis": hypothesis_title,
             "score": round(latest.composite_score, 4),
             "accepted": latest.accepted,
+            "reason": verdict_reason,
+            "failure_analysis": latest.failure_analysis,
             "diff_summary": diff_summary,
             "proposed_code": proposed,
             "proposed_config": proposed_config_dump,
