@@ -395,6 +395,11 @@
                   <span>{{ "%.4f"|format(entry.score) }}</span>
                 {% endif %}
               </div>
+              {% if entry.hypothesis_id %}
+                <p class="is-size-7 mb-2">Hypothesis ID: <a href="{{ url_for('hypotheses', hypothesis_id=entry.hypothesis_id) }}"><code>{{ entry.hypothesis_id }}</code></a></p>
+              {% elif entry.experiment_id %}
+                <p class="is-size-7 mb-2">Experiment ID: <a href="{{ url_for('hypotheses', experiment_id=entry.experiment_id) }}"><code>{{ entry.experiment_id }}</code></a></p>
+              {% endif %}
               {% if entry.hypothesis %}
                 <p class="mb-2"><strong>Hypothesis:</strong> {{ entry.hypothesis }}</p>
               {% endif %}
@@ -438,6 +443,12 @@
                   </span>
                 {% endif %}
               </div>
+
+              {% if entry.hypothesis_id %}
+                <p class="is-size-7 mb-2">Hypothesis ID: <a href="{{ url_for('hypotheses', hypothesis_id=entry.hypothesis_id) }}"><code>{{ entry.hypothesis_id }}</code></a></p>
+              {% elif entry.experiment_id %}
+                <p class="is-size-7 mb-2">Experiment ID: <a href="{{ url_for('hypotheses', experiment_id=entry.experiment_id) }}"><code>{{ entry.experiment_id }}</code></a></p>
+              {% endif %}
 
               {% if entry.hypothesis %}
                 <p class="mb-3"><strong>Hypothesis:</strong> {{ entry.hypothesis }}</p>

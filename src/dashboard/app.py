@@ -811,13 +811,26 @@ def describe_question_focus(question_focus: str) -> str:
 def get_question_type_options() -> list[dict[str, object]]:
     settings = get_settings()
     loader = EnterpriseRagBenchLoader(settings.benchmark_root)
+    questions = loader.load_questions()
     counts: dict[str, int] = {}
-    for question in loader.load_questions():
+    previews: dict[str, list[dict[str, object]]] = {"all": []}
+    for question in questions:
         qtype = question.question_type or "unknown"
         counts[qtype] = counts.get(qtype, 0) + 1
-    options = [{"value": "all", "label": "Generic mix", "count": sum(counts.values()), "description": "Balanced benchmark coverage across question types.", "tooltip": describe_question_focus("all"), "starting_config": build_starting_config_for_focus("all")}]
+        preview = {
+            "question_id": question.question_id,
+            "question": question.question,
+            "source_types": question.source_types,
+            "expected_doc_count": len(question.expected_doc_ids),
+        }
+        if len(previews["all"]) < 5:
+            previews["all"].append(preview)
+        previews.setdefault(qtype, [])
+        if len(previews[qtype]) < 5:
+            previews[qtype].append(preview)
+    options = [{"value": "all", "label": "Generic mix", "count": sum(counts.values()), "description": "Balanced benchmark coverage across question types.", "tooltip": describe_question_focus("all"), "starting_config": build_starting_config_for_focus("all"), "preview_questions": previews["all"]}]
     for qtype, count in sorted(counts.items(), key=lambda item: item[0]):
-        options.append({"value": qtype, "label": qtype.replace("_", " ").title(), "count": count, "description": f"Tune starting config for {qtype.replace('_', ' ')} questions.", "tooltip": describe_question_focus(qtype), "starting_config": build_starting_config_for_focus(qtype)})
+        options.append({"value": qtype, "label": qtype.replace("_", " ").title(), "count": count, "description": f"Tune starting config for {qtype.replace('_', ' ')} questions.", "tooltip": describe_question_focus(qtype), "starting_config": build_starting_config_for_focus(qtype), "preview_questions": previews.get(qtype, [])})
     return options
 
 
@@ -1265,6 +1278,60 @@ def build_hypothesis_rows(items: list[dict] | None) -> list[dict[str, object]]:
     return rows
 
 
+def normalize_hypothesis_ids(value: object) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        ids = [str(item).strip() for item in value if str(item or "").strip()]
+        return list(dict.fromkeys(ids))
+
+    text = str(value or "").strip()
+    if not text or text == "—":
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return normalize_hypothesis_ids(parsed)
+    for separator in (",", ";"):
+        if separator in text:
+            return list(dict.fromkeys(part.strip() for part in text.split(separator) if part.strip()))
+    return [text]
+
+
+def find_hypothesis_detail(
+    lookup_id: str,
+    hypothesis_rows: list[dict[str, object]],
+    experiment_rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], str | None, str]:
+    query = lookup_id.strip()
+    if not query:
+        return [], [], None, ""
+
+    hypothesis_index = {str(row.get("id") or ""): row for row in hypothesis_rows}
+    matched_ids = normalize_hypothesis_ids(query) if query in hypothesis_index else []
+    matched_experiment_id = ""
+
+    if not matched_ids:
+        for experiment in experiment_rows:
+            if str(experiment.get("id") or "") == query:
+                matched_ids = normalize_hypothesis_ids(experiment.get("hypothesis_ids") or experiment.get("hypothesis_id"))
+                matched_experiment_id = query
+                break
+
+    selected_hypotheses = [hypothesis_index[hypothesis_id] for hypothesis_id in matched_ids if hypothesis_id in hypothesis_index]
+    if not selected_hypotheses:
+        return [], [], f"No hypothesis found for '{query}'.", matched_experiment_id
+
+    selected_ids = {str(row.get("id") or "") for row in selected_hypotheses}
+    related_experiments = [
+        experiment
+        for experiment in experiment_rows
+        if selected_ids.intersection(normalize_hypothesis_ids(experiment.get("hypothesis_ids") or experiment.get("hypothesis_id")))
+    ]
+    return selected_hypotheses, related_experiments, None, matched_experiment_id
+
+
 def build_failure_chart_rows(results: list[dict] | None) -> list[dict[str, object]]:
     counts = {"Correct": 0, "Incorrect": 0, "Unknown": 0}
     palette = {
@@ -1326,13 +1393,15 @@ def build_experiment_rows(
         question_ids = item.get("question_ids") if isinstance(item.get("question_ids"), list) else []
         score_item = board_index.get(experiment_id, {})
         created_at = parse_iso_datetime(item.get("created_at"))
+        hypothesis_ids = normalize_hypothesis_ids(item.get("hypothesis_id"))
         rows.append(
             {
                 "id": experiment_id,
                 "name": item.get("name") or "Untitled",
                 "run_id": item.get("run_id") or "",
                 "run_position": item.get("run_position"),
-                "hypothesis_id": item.get("hypothesis_id") or "—",
+                "hypothesis_ids": hypothesis_ids,
+                "hypothesis_id": ", ".join(hypothesis_ids) or "—",
                 "strategy": config.get("strategy") if isinstance(config, dict) else None,
                 "top_k": config.get("top_k") if isinstance(config, dict) else None,
                 "question_count": len(question_ids),
@@ -1696,6 +1765,8 @@ def build_journey_entries(score_history: list[dict] | None, baseline_config: dic
         entries.append(
             {
                 "iteration": entry.get("iteration"),
+                "experiment_id": str(entry.get("experiment_id") or ""),
+                "hypothesis_id": (normalize_hypothesis_ids(entry.get("hypothesis_id")) or [""])[0],
                 "score": score,
                 "baseline": baseline,
                 "delta": delta,
@@ -1717,6 +1788,8 @@ def build_code_history_entries(code_history: list[dict] | None, baseline_config:
         entries.append(
             {
                 **entry,
+                "experiment_id": str(entry.get("experiment_id") or ""),
+                "hypothesis_id": (normalize_hypothesis_ids(entry.get("hypothesis_id")) or [""])[0],
                 "hypothesis": normalize_display_text(entry.get("hypothesis")),
                 "diff_summary": normalize_display_text(entry.get("diff_summary")),
                 "config_items": build_config_items(proposed_config, baseline_config),
@@ -2264,11 +2337,40 @@ def experiments():
     )
 
 
-@app.route("/hypotheses")
+@app.route("/hypotheses", methods=["GET", "POST"])
 def hypotheses():
     items, error = api_request("GET", "/hypotheses")
+    experiment_items, experiment_error = api_request("GET", "/experiments")
     rows = build_hypothesis_rows(items or [])
-    return render_template("hypotheses.html", hypotheses=rows, error=error)
+    experiment_rows = build_experiment_rows(experiment_items or [])
+
+    if request.method == "POST":
+        lookup_id = (request.form.get("lookup_id") or "").strip()
+    else:
+        lookup_id = (
+            request.args.get("hypothesis_id")
+            or request.args.get("experiment_id")
+            or request.args.get("lookup_id")
+            or ""
+        ).strip()
+
+    selected_hypotheses, related_experiments, search_error, matched_experiment_id = find_hypothesis_detail(
+        lookup_id,
+        rows,
+        experiment_rows,
+    )
+    return render_template(
+        "hypotheses.html",
+        hypotheses=rows,
+        experiments=experiment_rows,
+        selected_hypotheses=selected_hypotheses,
+        related_experiments=related_experiments,
+        lookup_id=lookup_id,
+        matched_experiment_id=matched_experiment_id,
+        error=error,
+        experiment_error=experiment_error,
+        search_error=search_error,
+    )
 
 
 @app.route("/experiments/new")

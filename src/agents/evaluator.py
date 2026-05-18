@@ -338,6 +338,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
     state["score_history"] = state.get("score_history", []) + [{
         "iteration": state["iteration"],
         "experiment_id": latest.experiment_id,
+        "hypothesis_id": latest_experiment.hypothesis_id if latest_experiment is not None else "",
         "score": round(latest.composite_score, 4),
         "baseline": round(history_baseline, 4) if history_baseline is not None else None,
         "validation_score": round(latest.validation_score, 4) if latest.validation_score is not None else None,
@@ -380,6 +381,8 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
 
         state["code_history"] = state.get("code_history", []) + [{
             "iteration": state["iteration"],
+            "experiment_id": latest.experiment_id,
+            "hypothesis_id": latest_experiment.hypothesis_id if latest_experiment is not None else "",
             "hypothesis": hypothesis_title,
             "score": round(latest.composite_score, 4),
             "accepted": latest.accepted,

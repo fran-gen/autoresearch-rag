@@ -406,6 +406,17 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
     step_started_at = mark("configs", step_started_at)
     score_history = _normalize_history_text(run_runtime.state.get("score_history"))
     code_history = _normalize_history_text(run_runtime.state.get("code_history"))
+    experiment_hypothesis_ids: dict[str, str] = {}
+    for experiment in run_runtime.state.get("completed_experiments", []) or []:
+        if hasattr(experiment, "id") and hasattr(experiment, "hypothesis_id"):
+            experiment_hypothesis_ids[str(experiment.id)] = str(experiment.hypothesis_id)
+        elif isinstance(experiment, dict) and experiment.get("id"):
+            experiment_hypothesis_ids[str(experiment["id"])] = str(experiment.get("hypothesis_id") or "")
+    for history in (score_history, code_history):
+        for row in history:
+            experiment_id = str(row.get("experiment_id") or "")
+            if experiment_id and not row.get("hypothesis_id"):
+                row["hypothesis_id"] = experiment_hypothesis_ids.get(experiment_id, "")
     step_started_at = mark("history", step_started_at)
     dataset_readiness = _status_dataset_readiness(run_runtime)
     step_started_at = mark("dataset_readiness", step_started_at)
