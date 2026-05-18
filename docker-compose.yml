@@ -10,7 +10,12 @@ services:
       - KARPATHY_HF_CACHE_HOST_PATH=${PWD}/.hf_cache
       - KARPATHY_DATA_HOST_PATH=${PWD}/data
       - KARPATHY_QDRANT_HOST_PATH=${PWD}/index/qdrant_data
-      - KARPATHY_SANDBOX_MEMORY=3g
+      - KARPATHY_SANDBOX_MEMORY=6g
+      - KARPATHY_SANDBOX_CPUS=2
+      - KARPATHY_SANDBOX_THREADS=2
+      - KARPATHY_RETRIEVE_TOP_K_CAP=24
+      - KARPATHY_RERANK_CANDIDATE_CAP=24
+      - KARPATHY_AUTO_RESET_FOCUS_AFTER_ACCEPT=false
       - QDRANT_PATH=/app/index/qdrant_data
     volumes:
       - ./:/app
@@ -45,4 +50,3 @@ services:
 
 volumes:
   flask_sessions:
-

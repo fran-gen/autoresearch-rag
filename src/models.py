@@ -60,6 +60,7 @@ class QuestionResult(BaseModel):
     question_id: str
     answer: str
     document_ids: list[str] = Field(default_factory=list)
+    document_scores: list[float] = Field(default_factory=list)
     latency_ms: float = 0.0
     is_correct: bool | None = None
 

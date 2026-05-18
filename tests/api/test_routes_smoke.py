@@ -19,7 +19,7 @@ client = TestClient(app)
 
 
 def test_research_status_empty_shape():
-    response = client.get("/research/status")
+    response = client.get("/api/research/status")
 
     assert response.status_code == 200
     payload = response.json()
@@ -39,7 +39,7 @@ def test_dataset_status_with_monkeypatched_readiness(monkeypatch):
         },
     )
 
-    response = client.get("/dataset/status")
+    response = client.get("/api/dataset/status")
     assert response.status_code == 200
     assert response.json()["ready"] is True
 
@@ -47,9 +47,9 @@ def test_dataset_status_with_monkeypatched_readiness(monkeypatch):
 def test_store_backed_endpoints_with_fake_store():
     routes.configure_store(_FakeStore())
 
-    experiments = client.get("/experiments")
-    leaderboard = client.get("/leaderboard")
-    hypotheses = client.get("/hypotheses")
+    experiments = client.get("/api/experiments")
+    leaderboard = client.get("/api/leaderboard")
+    hypotheses = client.get("/api/hypotheses")
 
     assert experiments.status_code == 200
     assert experiments.json() == []

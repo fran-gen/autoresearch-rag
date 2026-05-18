@@ -95,6 +95,8 @@ def compute_retrieval_metrics(
         latencies.append(result.latency_ms)
 
         if not gt_ids:
+            if retrieval_only:
+                invalid_extra_counts.append(len(pred_set))
             continue
 
         overlap = pred_set.intersection(gt_ids)

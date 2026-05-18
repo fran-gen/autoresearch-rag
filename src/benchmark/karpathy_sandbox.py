@@ -19,6 +19,52 @@ logger = logging.getLogger(__name__)
 RetrieveFn = Callable[[object, BaseRetriever, int], list[RetrievedDocument]]
 
 
+class _CappedRetriever(BaseRetriever):
+    """Clamp generated pipeline retrieval calls to a bounded candidate pool."""
+
+    def __init__(self, retriever: BaseRetriever, top_k_cap: int) -> None:
+        self.retriever = retriever
+        self.top_k_cap = max(1, top_k_cap)
+        self._logged_cap = False
+
+    def retrieve(self, query: str, top_k: int = 8) -> list[RetrievedDocument]:
+        requested = max(1, int(top_k))
+        effective_top_k = min(requested, self.top_k_cap)
+        if requested > effective_top_k and not self._logged_cap:
+            self._logged_cap = True
+            logger.info(
+                "Karpathy benchmark: capped retrieve top_k from %s to %s",
+                requested,
+                effective_top_k,
+            )
+        return self.retriever.retrieve(query, top_k=effective_top_k)
+
+
+class _CappedReranker:
+    """Clamp cross-encoder candidate batches before expensive reranking."""
+
+    def __init__(self, reranker: object, candidate_cap: int) -> None:
+        self.reranker = reranker
+        self.candidate_cap = max(1, candidate_cap)
+        self._logged_cap = False
+
+    def rerank(
+        self,
+        query: str,
+        candidates: list[RetrievedDocument],
+        top_k: int | None = None,
+    ) -> list[RetrievedDocument]:
+        capped_candidates = candidates[: self.candidate_cap]
+        if len(candidates) > len(capped_candidates) and not self._logged_cap:
+            self._logged_cap = True
+            logger.info(
+                "Karpathy benchmark: capped rerank candidates from %s to %s",
+                len(candidates),
+                len(capped_candidates),
+            )
+        return self.reranker.rerank(query, capped_candidates, top_k=top_k)
+
+
 def _build_retriever(
     documents: list,
     config: RetrievalConfig,
@@ -86,14 +132,22 @@ def run_karpathy_benchmark(
         dense.load()
 
     retriever = _build_retriever(documents, active_config, dense)
+    retrieve_cap = max(active_config.top_k, settings.karpathy_retrieve_top_k_cap)
+    retriever = _CappedRetriever(retriever, retrieve_cap)
+
+    rerank_cap = max(active_config.top_k, settings.karpathy_rerank_candidate_cap)
     reranker = _build_reranker(active_config)
+    if reranker is not None:
+        reranker = _CappedReranker(reranker, rerank_cap)
 
     logger.info(
-        "Karpathy benchmark: strategy=%s top_k=%s reranker=%s hybrid=%s",
+        "Karpathy benchmark: strategy=%s top_k=%s reranker=%s hybrid=%s retrieve_cap=%s rerank_cap=%s",
         active_config.strategy,
         active_config.top_k,
         bool(reranker),
-        isinstance(retriever, HybridRetriever),
+        isinstance(getattr(retriever, "retriever", retriever), HybridRetriever),
+        retrieve_cap,
+        rerank_cap,
     )
 
     top_k = active_config.top_k
@@ -102,15 +156,13 @@ def run_karpathy_benchmark(
     for question in questions:
         start = time.perf_counter()
         try:
-            docs = retrieve_fn(question, retriever, top_k)
+            docs = retrieve_fn(
+                question, retriever, top_k,
+                encoder=encoder, reranker=reranker,
+            )
         except Exception:
             docs = []
-
-        if reranker and docs:
-            try:
-                docs = reranker.rerank(question.question, docs, top_k=top_k)
-            except Exception as exc:
-                logger.warning("Reranker failed for question %s: %s", question.question_id, exc)
+        docs = docs[:top_k]
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         question_results.append(
@@ -118,6 +170,7 @@ def run_karpathy_benchmark(
                 question_id=question.question_id,
                 answer="",
                 document_ids=[doc.document_id for doc in docs],
+                document_scores=[doc.score for doc in docs],
                 latency_ms=elapsed_ms,
             )
         )
