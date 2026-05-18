@@ -64,12 +64,25 @@
 
           <div class="research-step-grid research-step-grid--compact">
             {% for option in question_type_options %}
-              <label class="research-step-card research-step-card--compact {% if option.value == selected_question_focus %}is-selected{% elif loop.first and not selected_question_focus %}is-selected{% endif %}" data-starting-config='{{ option.starting_config | tojson }}' data-tooltip="{{ option.tooltip }}">
-                <input type="radio" name="question_focus" value="{{ option.value }}" {% if option.value == selected_question_focus %}checked{% elif loop.first and not selected_question_focus %}checked{% endif %}>
-                <span class="research-step-card__number">{{ loop.index }}</span>
-                <span class="research-step-card__title">{{ option.label }} <span class="help-tooltip" tabindex="0" aria-label="{{ option.tooltip }}" data-tooltip="{{ option.tooltip }}">?</span></span>
-                <span class="tag is-light">{{ option.count }} question{{ '' if option.count == 1 else 's' }}</span>
-              </label>
+              <div class="research-step-card research-step-card--compact {% if option.value == selected_question_focus %}is-selected{% elif loop.first and not selected_question_focus %}is-selected{% endif %}" data-starting-config='{{ option.starting_config | tojson }}' data-tooltip="{{ option.tooltip }}">
+                <input id="question_focus_{{ loop.index }}" type="radio" name="question_focus" value="{{ option.value }}" {% if option.value == selected_question_focus %}checked{% elif loop.first and not selected_question_focus %}checked{% endif %}>
+                <label class="research-step-card__selection" for="question_focus_{{ loop.index }}">
+                  <span class="research-step-card__number">{{ loop.index }}</span>
+                  <span class="research-step-card__content">
+                    <span class="research-step-card__title">{{ option.label }} <span class="help-tooltip" tabindex="0" aria-label="{{ option.tooltip }}" data-tooltip="{{ option.tooltip }}">?</span></span>
+                    <span class="tag is-light">{{ option.count }} question{{ '' if option.count == 1 else 's' }}</span>
+                  </span>
+                </label>
+                <button
+                  class="button is-small is-light research-step-card__preview js-question-preview-trigger"
+                  type="button"
+                  data-question-label="{{ option.label }}"
+                  data-question-count="{{ option.count }}"
+                  data-question-description="{{ option.description }}"
+                  data-question-preview='{{ option.preview_questions | tojson }}'>
+                  View
+                </button>
+              </div>
             {% endfor %}
           </div>
         </section>
@@ -286,6 +299,23 @@
     </div>
   </div>
 
+  <div class="modal config-modal" id="question-preview-modal" aria-hidden="true">
+    <div class="modal-background js-modal-close"></div>
+    <div class="modal-card config-modal-card question-preview-modal-card">
+      <header class="modal-card-head">
+        <div>
+          <p class="modal-card-title" id="question-preview-title">Question set preview</p>
+          <p class="field-hint mb-0" id="question-preview-meta">Showing sample questions from this benchmark slice.</p>
+        </div>
+        <button class="delete js-modal-close" type="button" aria-label="close"></button>
+      </header>
+      <section class="modal-card-body question-preview-modal-body">
+        <p class="question-preview-description" id="question-preview-description"></p>
+        <div class="question-preview-list" id="question-preview-list"></div>
+      </section>
+    </div>
+  </div>
+
   {% if research_setups %}
     <div class="box page-block">
       <p class="heading">History</p>
@@ -333,6 +363,81 @@
         input.addEventListener('change', function () {
           cards.forEach(function (c) { c.classList.remove('is-selected'); });
           card.classList.add('is-selected');
+        });
+      });
+
+      var previewModal = document.getElementById('question-preview-modal');
+      var previewTitle = document.getElementById('question-preview-title');
+      var previewMeta = document.getElementById('question-preview-meta');
+      var previewDescription = document.getElementById('question-preview-description');
+      var previewList = document.getElementById('question-preview-list');
+
+      document.querySelectorAll('.js-question-preview-trigger').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!previewModal || !previewTitle || !previewMeta || !previewDescription || !previewList) return;
+
+          var questions = [];
+          try {
+            questions = JSON.parse(button.dataset.questionPreview || '[]');
+          } catch (error) {
+            questions = [];
+          }
+
+          var questionCount = Number(button.dataset.questionCount || 0);
+          previewTitle.textContent = button.dataset.questionLabel || 'Question set preview';
+          previewMeta.textContent = questionCount
+            ? questionCount + ' questions in this set. Showing up to ' + questions.length + ' examples.'
+            : 'Showing sample questions from this benchmark slice.';
+          previewDescription.textContent = button.dataset.questionDescription || '';
+          previewList.replaceChildren();
+
+          if (!questions.length) {
+            var empty = document.createElement('p');
+            empty.className = 'field-hint mb-0';
+            empty.textContent = 'No sample questions are available for this category yet.';
+            previewList.appendChild(empty);
+          } else {
+            questions.forEach(function (item, index) {
+              var article = document.createElement('article');
+              article.className = 'question-preview-item';
+
+              var top = document.createElement('div');
+              top.className = 'question-preview-item__top';
+
+              var indexTag = document.createElement('span');
+              indexTag.className = 'tag is-light';
+              indexTag.textContent = 'Q' + String(index + 1);
+              top.appendChild(indexTag);
+
+              if (item.expected_doc_count) {
+                var docsTag = document.createElement('span');
+                docsTag.className = 'tag is-dark is-light';
+                docsTag.textContent = item.expected_doc_count + ' expected doc' + (item.expected_doc_count === 1 ? '' : 's');
+                top.appendChild(docsTag);
+              }
+
+              article.appendChild(top);
+
+              var question = document.createElement('p');
+              question.className = 'question-preview-item__question';
+              question.textContent = item.question || 'Untitled question';
+              article.appendChild(question);
+
+              if (Array.isArray(item.source_types) && item.source_types.length) {
+                var sourceTypes = document.createElement('p');
+                sourceTypes.className = 'question-preview-item__meta';
+                sourceTypes.textContent = 'Source types: ' + item.source_types.join(', ');
+                article.appendChild(sourceTypes);
+              }
+
+              previewList.appendChild(article);
+            });
+          }
+
+          previewModal.classList.add('is-active');
+          previewModal.setAttribute('aria-hidden', 'false');
         });
       });
 

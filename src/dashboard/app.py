@@ -783,13 +783,26 @@ def describe_question_focus(question_focus: str) -> str:
 def get_question_type_options() -> list[dict[str, object]]:
     settings = get_settings()
     loader = EnterpriseRagBenchLoader(settings.benchmark_root)
+    questions = loader.load_questions()
     counts: dict[str, int] = {}
-    for question in loader.load_questions():
+    previews: dict[str, list[dict[str, object]]] = {"all": []}
+    for question in questions:
         qtype = question.question_type or "unknown"
         counts[qtype] = counts.get(qtype, 0) + 1
-    options = [{"value": "all", "label": "Generic mix", "count": sum(counts.values()), "description": "Balanced benchmark coverage across question types.", "tooltip": describe_question_focus("all"), "starting_config": build_starting_config_for_focus("all")}]
+        preview = {
+            "question_id": question.question_id,
+            "question": question.question,
+            "source_types": question.source_types,
+            "expected_doc_count": len(question.expected_doc_ids),
+        }
+        if len(previews["all"]) < 5:
+            previews["all"].append(preview)
+        previews.setdefault(qtype, [])
+        if len(previews[qtype]) < 5:
+            previews[qtype].append(preview)
+    options = [{"value": "all", "label": "Generic mix", "count": sum(counts.values()), "description": "Balanced benchmark coverage across question types.", "tooltip": describe_question_focus("all"), "starting_config": build_starting_config_for_focus("all"), "preview_questions": previews["all"]}]
     for qtype, count in sorted(counts.items(), key=lambda item: item[0]):
-        options.append({"value": qtype, "label": qtype.replace("_", " ").title(), "count": count, "description": f"Tune starting config for {qtype.replace('_', ' ')} questions.", "tooltip": describe_question_focus(qtype), "starting_config": build_starting_config_for_focus(qtype)})
+        options.append({"value": qtype, "label": qtype.replace("_", " ").title(), "count": count, "description": f"Tune starting config for {qtype.replace('_', ' ')} questions.", "tooltip": describe_question_focus(qtype), "starting_config": build_starting_config_for_focus(qtype), "preview_questions": previews.get(qtype, [])})
     return options
 
 
