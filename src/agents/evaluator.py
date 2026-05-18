@@ -28,12 +28,23 @@ def _build_per_type_breakdown(
     question_results: list[QuestionResult],
     top_k: int,
     benchmark_root: str | None = None,
-) -> tuple[str, list[dict]]:
-    """Compute per-question-type recall/precision and pick worst failures."""
+) -> tuple[str, list[dict], dict[str, float]]:
+    """Compute per-question-type recall/precision and pick worst failures.
+
+    Returns (per_type_summary, failure_examples, per_type_recalls) where
+    per_type_recalls maps question_type -> average recall for delta computation.
+    """
     settings = get_settings()
     loader = EnterpriseRagBenchLoader(Path(benchmark_root) if benchmark_root else settings.benchmark_root)
     questions = loader.load_questions()
     q_map = {q.question_id: q for q in questions}
+
+    doc_map: dict[str, object] | None = None
+    try:
+        documents = loader.load_documents()
+        doc_map = {d.document_id: d for d in documents}
+    except Exception:
+        pass
 
     type_recalls: dict[str, list[float]] = defaultdict(list)
     type_precisions: dict[str, list[float]] = defaultdict(list)
@@ -54,28 +65,50 @@ def _build_per_type_breakdown(
         precision = len(pred & gt) / len(pred) if pred else 0.0
         type_recalls[qtype].append(recall)
         type_precisions[qtype].append(precision)
-        scored.append((recall, {
+
+        entry: dict = {
             "question_id": result.question_id,
             "question": q.question[:200],
             "question_type": qtype,
             "expected_doc_ids": q.expected_doc_ids[:5],
             "retrieved_doc_ids": result.document_ids[:top_k],
             "recall": round(recall, 3),
-        }))
+        }
+
+        if result.document_scores:
+            entry["retrieved_scores"] = [round(s, 4) for s in result.document_scores[:top_k]]
+
+        missed_ids = gt - pred
+        if missed_ids and doc_map:
+            missed_snippets = []
+            for mid in list(missed_ids)[:3]:
+                doc_obj = doc_map.get(mid)
+                if doc_obj is not None:
+                    title = getattr(doc_obj, "title", "") or ""
+                    body = getattr(doc_obj, "body", "") or ""
+                    snippet = f"{title}: {body}"[:200]
+                    missed_snippets.append({"doc_id": mid, "text_snippet": snippet})
+                else:
+                    missed_snippets.append({"doc_id": mid, "text_snippet": "(not found)"})
+            entry["missed_doc_snippets"] = missed_snippets
+
+        scored.append((recall, entry))
 
     lines: list[str] = []
+    per_type_recall_avgs: dict[str, float] = {}
     for qtype in sorted(type_counts, key=lambda t: type_counts[t], reverse=True):
         n = type_counts[qtype]
         recs = type_recalls.get(qtype, [])
         precs = type_precisions.get(qtype, [])
         avg_r = sum(recs) / max(len(recs), 1)
         avg_p = sum(precs) / max(len(precs), 1)
+        per_type_recall_avgs[qtype] = avg_r
         lines.append(f"{qtype}: recall={avg_r:.3f} precision={avg_p:.3f} ({n}q)")
 
     per_type_summary = " | ".join(lines) if lines else "No per-type data."
     scored.sort(key=lambda x: x[0])
     failure_examples = [item for _, item in scored[:5]]
-    return per_type_summary, failure_examples
+    return per_type_summary, failure_examples, per_type_recall_avgs
 
 
 def _classify_failures(
@@ -374,11 +407,74 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
     if latest_experiment is not None:
         top_k = latest_experiment.retrieval_config.top_k
 
-    per_type_summary, failure_examples = _build_per_type_breakdown(
+    per_type_summary, failure_examples, per_type_recalls = _build_per_type_breakdown(
         latest.question_results, top_k, state.get("benchmark_root")
     )
     state["per_type_summary"] = per_type_summary
     state["failure_examples"] = failure_examples
+
+    prev_recalls = state.get("previous_per_type_recalls", {})
+    if prev_recalls and per_type_recalls:
+        delta_parts = []
+        all_types = sorted(set(prev_recalls) | set(per_type_recalls))
+        for qtype in all_types:
+            old_r = prev_recalls.get(qtype, 0.0)
+            new_r = per_type_recalls.get(qtype, 0.0)
+            d = new_r - old_r
+            delta_parts.append(f"{qtype}: recall {d:+.3f}")
+        state["per_type_deltas"] = " | ".join(delta_parts)
+    else:
+        state["per_type_deltas"] = ""
+    state["previous_per_type_recalls"] = per_type_recalls
+
+    if state.get("research_mode") == "karpathy":
+        per_type_impact = {}
+        if prev_recalls and per_type_recalls:
+            for qtype in set(prev_recalls) | set(per_type_recalls):
+                per_type_impact[qtype] = round(
+                    per_type_recalls.get(qtype, 0.0) - prev_recalls.get(qtype, 0.0), 4
+                )
+        cfg_summary = {}
+        if latest_experiment:
+            cfg = latest_experiment.retrieval_config
+            cfg_summary = {
+                "strategy": cfg.strategy,
+                "top_k": cfg.top_k,
+                "use_reranker": cfg.use_reranker,
+            }
+            if cfg.strategy == "hybrid":
+                cfg_summary["bm25_weight"] = cfg.bm25_weight
+                cfg_summary["dense_weight"] = cfg.dense_weight
+        state["technique_registry"] = state.get("technique_registry", []) + [{
+            "technique": hypothesis_title,
+            "iteration": state["iteration"],
+            "accepted": latest.accepted,
+            "per_type_impact": per_type_impact,
+            "config_used": cfg_summary,
+        }]
+
+    if state.get("research_mode") == "karpathy":
+        if latest.accepted:
+            if state.get("question_focus", "all") != "all":
+                logger.info("Karpathy auto-focus: resetting to 'all' after acceptance")
+            state["question_focus"] = "all"
+        else:
+            code_hist = state.get("code_history", [])
+            consecutive_rejections = 0
+            for entry in reversed(code_hist):
+                if not entry.get("accepted"):
+                    consecutive_rejections += 1
+                else:
+                    break
+            if consecutive_rejections >= 2 and per_type_recalls:
+                weakest_type = min(per_type_recalls, key=per_type_recalls.get)  # type: ignore[arg-type]
+                if state.get("question_focus", "all") != weakest_type:
+                    logger.info(
+                        "Karpathy auto-focus: switching to '%s' after %d consecutive rejections",
+                        weakest_type, consecutive_rejections,
+                    )
+                state["question_focus"] = weakest_type
+
     taxonomy = _classify_failures(latest.question_results, top_k, state.get("benchmark_root"))
     state["failure_taxonomy"] = taxonomy
     state["recommendation"] = _recommend_next_action(per_type_summary, taxonomy)
@@ -389,6 +485,11 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         )
 
     correctness = metrics.answer_correctness
+    focus_note = ""
+    current_focus = state.get("question_focus", "all")
+    if current_focus and current_focus != "all":
+        focus_note = f", auto_focus={current_focus}"
+
     parts = [
         f"Experiment {latest.experiment_id}",
         f"recall@k={metrics.recall_at_k:.3f}",
@@ -403,7 +504,7 @@ async def evaluator_agent(state: ResearchLabState) -> ResearchLabState:
         f"holdout_delta={(latest.validation_delta or 0.0):.4f}" if latest.validation_delta is not None else "holdout_delta=n/a",
         f"accepted={latest.accepted}",
     ]
-    state["latest_summary"] = ", ".join(parts)
+    state["latest_summary"] = ", ".join(parts) + focus_note
 
     state["iteration"] += 1
     if state["iteration"] >= state["max_iterations"]:

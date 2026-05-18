@@ -40,6 +40,10 @@ You can change BOTH the code AND the config on each iteration.
 {per_type_summary}
 
 ## WORST FAILURES (lowest recall questions)
+Each failure includes: the question, expected vs retrieved doc IDs, recall,
+retrieved document scores (if available), and text snippets of missed documents
+(if available). Use this to understand the semantic gap between queries and
+missed documents.
 {failure_examples}
 
 ## PREVIOUSLY TRIED APPROACHES AND RESULTS (do NOT repeat failed ideas)
@@ -74,7 +78,36 @@ class BaseRetriever(ABC):
         ...
     # This is the ONLY method available. There is NO retrieve_bm25,
     # NO retrieve_sparse, NO search, NO other method.
+
+class EmbeddingEncoder:
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        ...
+    # Encodes a list of texts into embedding vectors (normalized).
+    # Useful for computing custom cosine similarities between queries and docs.
+
+class CrossEncoderReranker:
+    def rerank(self, query: str, candidates: list[RetrievedDocument],
+               top_k: int | None = None) -> list[RetrievedDocument]:
+        ...
+    # Reranks candidates using a cross-encoder model. Returns docs sorted
+    # by cross-encoder score (best first), optionally truncated to top_k.
 ```
+
+Your function signature is:
+```python
+def retrieve(
+    question: BenchmarkQuestion,
+    retriever: BaseRetriever,
+    top_k: int,
+    *,
+    encoder: EmbeddingEncoder | None = None,
+    reranker: CrossEncoderReranker | None = None,
+) -> list[RetrievedDocument]:
+```
+
+The keyword-only `encoder` and `reranker` are passed by the benchmark harness.
+You may use them or ignore them. If use_reranker=true in config, a reranker
+object is provided — you decide when/how to apply it inside your function.
 
 ## RETRIEVAL CONFIG OPTIONS
 You can also modify the retrieval config alongside the code. Available fields:
@@ -82,22 +115,29 @@ You can also modify the retrieval config alongside the code. Available fields:
 - "top_k": integer 3-20 (number of documents to retrieve)
 - "bm25_weight": float 0.0-1.0 (BM25 fusion weight, used when strategy="hybrid")
 - "dense_weight": float 0.0-1.0 (dense fusion weight, used when strategy="hybrid")
-- "use_reranker": true or false (cross-encoder reranker applied AFTER retrieve())
+- "use_reranker": true or false (whether a reranker object is provided to your function)
 - "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2" or null
 
 IMPORTANT NOTES ON CONFIG:
 - When strategy="hybrid", the retriever passed to your function already does
   BM25+dense fusion internally. You do NOT need to implement BM25 yourself.
-- When use_reranker=true, a cross-encoder reranker is applied AFTER your
-  retrieve() function returns — you don't need to implement reranking.
+- When use_reranker=true, the reranker object is passed to your function.
+  YOU control when and how to apply it (e.g. rerank after merging multi-query results).
+- The encoder is always provided regardless of config. Use it for custom
+  similarity computations if needed.
 - You CAN implement query rewriting by calling retriever.retrieve() multiple
   times with different queries and merging results.
 
+{per_type_deltas}
+
+{technique_registry}
+
 ## RULES
 - Return the COMPLETE file contents (not a diff, not a snippet)
-- Keep the function signature EXACTLY: retrieve(question, retriever, top_k) -> list[RetrievedDocument]
+- Keep the positional args EXACTLY: retrieve(question, retriever, top_k, *, ...)
+- You may add keyword-only args: encoder, reranker (with None defaults)
 - You may add helper functions ABOVE retrieve()
-- Allowed imports: src.retrieval.base, src.benchmark.loader, re, math, statistics, collections, itertools, functools
+- Allowed imports: src.retrieval.base, src.retrieval.embeddings, src.retrieval.reranker, src.benchmark.loader, re, math, statistics, collections, itertools, functools
 - NO imports of: os, sys, subprocess, socket, requests, urllib, pathlib, shutil
 - Focus on ONE clear improvement per iteration
 - The retriever ONLY has .retrieve(query, top_k). Do NOT call any other method.
@@ -121,20 +161,25 @@ from __future__ import annotations
 
 from src.benchmark.loader import BenchmarkQuestion
 from src.retrieval.base import BaseRetriever, RetrievedDocument
+from src.retrieval.embeddings import EmbeddingEncoder
+from src.retrieval.reranker import CrossEncoderReranker
 
 
 def retrieve(
     question: BenchmarkQuestion,
     retriever: BaseRetriever,
     top_k: int,
+    *,
+    encoder: EmbeddingEncoder | None = None,
+    reranker: CrossEncoderReranker | None = None,
 ) -> list[RetrievedDocument]:
     return retriever.retrieve(question.question, top_k=top_k)
 '''
 
 
-def _candidate_models(fast: str, full: str) -> list[str]:
-    """Deduplicated model list with reliable fallbacks."""
-    ordered = [fast, full, "gemini-2.5-flash", "gemini-2.5-pro"]
+def _candidate_models(full: str, fast: str) -> list[str]:
+    """Deduplicated model list for Karpathy code generation."""
+    ordered = [full, fast, "gemini-2.5-pro", "gemini-2.5-flash"]
     seen: set[str] = set()
     out: list[str] = []
     for m in ordered:
@@ -178,6 +223,24 @@ def _format_code_history(state: ResearchLabState) -> str:
                 lines.append(f"    Config: {json.dumps(cfg_summary)}")
 
     return "\n\n".join(lines)
+
+
+def _format_technique_registry(registry: list[dict]) -> str:
+    """Render the technique registry as a readable table for the LLM."""
+    if not registry:
+        return ""
+    lines = ["## TECHNIQUE REGISTRY (what worked and what didn't)"]
+    for entry in registry:
+        verdict = "ACCEPTED" if entry.get("accepted") else "REJECTED"
+        technique = entry.get("technique", "unknown")
+        impact = entry.get("per_type_impact", {})
+        impact_parts = [f"{t}: {d:+.3f}" for t, d in impact.items()] if impact else ["n/a"]
+        cfg = entry.get("config_used", {})
+        cfg_summary = ", ".join(f"{k}={v}" for k, v in cfg.items()) if cfg else "default"
+        lines.append(
+            f"- [{verdict}] {technique} | impact: {', '.join(impact_parts)} | config: {cfg_summary}"
+        )
+    return "\n".join(lines)
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -257,12 +320,17 @@ from __future__ import annotations
 
 from src.benchmark.loader import BenchmarkQuestion
 from src.retrieval.base import BaseRetriever, RetrievedDocument
+from src.retrieval.embeddings import EmbeddingEncoder
+from src.retrieval.reranker import CrossEncoderReranker
 
 
 def retrieve(
     question: BenchmarkQuestion,
     retriever: BaseRetriever,
     top_k: int,
+    *,
+    encoder: EmbeddingEncoder | None = None,
+    reranker: CrossEncoderReranker | None = None,
 ) -> list[RetrievedDocument]:
     query = question.question
     docs = retriever.retrieve(query, top_k=top_k)
@@ -284,12 +352,17 @@ from __future__ import annotations
 
 from src.benchmark.loader import BenchmarkQuestion
 from src.retrieval.base import BaseRetriever, RetrievedDocument
+from src.retrieval.embeddings import EmbeddingEncoder
+from src.retrieval.reranker import CrossEncoderReranker
 
 
 def retrieve(
     question: BenchmarkQuestion,
     retriever: BaseRetriever,
     top_k: int,
+    *,
+    encoder: EmbeddingEncoder | None = None,
+    reranker: CrossEncoderReranker | None = None,
 ) -> list[RetrievedDocument]:
     query = question.question
     effective_top_k = max(1, min(top_k, 5))
@@ -300,6 +373,24 @@ def retrieve(
     return docs[:top_k]
 '''
     return current
+
+
+def _consecutive_rejections(state: ResearchLabState) -> int:
+    """Count how many iterations in a row were rejected (tail of code_history)."""
+    count = 0
+    for entry in reversed(state.get("code_history", [])):
+        if not entry.get("accepted"):
+            count += 1
+        else:
+            break
+    return count
+
+
+def _compute_temperature(state: ResearchLabState) -> float:
+    """Progressive temperature: 0.4 base, +0.1 per consecutive rejection, cap 0.9."""
+    base = 0.4
+    rejections = _consecutive_rejections(state)
+    return min(base + 0.1 * rejections, 0.9)
 
 
 async def code_planner_agent(state: ResearchLabState) -> ResearchLabState:
@@ -324,6 +415,15 @@ async def code_planner_agent(state: ResearchLabState) -> ResearchLabState:
     failure_ex = state.get("failure_examples", [])
     failure_text = json.dumps(failure_ex[:5], indent=2) if failure_ex else "None yet."
 
+    per_type_deltas = state.get("per_type_deltas", "")
+    deltas_section = (
+        f"## PER-TYPE SCORE DELTAS (vs previous iteration)\n{per_type_deltas}"
+        if per_type_deltas else ""
+    )
+
+    registry = state.get("technique_registry", [])
+    registry_section = _format_technique_registry(registry) if registry else ""
+
     prompt = CODE_PLANNER_PROMPT.format(
         current_code=current_code,
         current_score=f"{best_score:.4f}" if best_score >= 0 else "not measured",
@@ -332,55 +432,66 @@ async def code_planner_agent(state: ResearchLabState) -> ResearchLabState:
         failure_examples=failure_text,
         code_history=_format_code_history(state),
         hypothesis=f"{latest_hypothesis.title}: {latest_hypothesis.rationale}",
+        per_type_deltas=deltas_section,
+        technique_registry=registry_section,
     )
 
     proposed_code = ""
     proposed_config = baseline_config.model_copy(deep=True)
     rationale = ""
+    temperature = _compute_temperature(state)
+    num_candidates = max(1, settings.karpathy_num_candidates)
+
+    candidates: list[dict] = []
 
     if settings.has_google_key:
-        for model_name in _candidate_models(settings.gemini_fast_model, settings.gemini_model):
-            if not model_name:
-                continue
-            try:
-                llm = ChatGoogleGenerativeAI(
-                    model=model_name,
-                    google_api_key=settings.google_api_key,
-                    temperature=0.4,
-                )
-                response = await llm.ainvoke([HumanMessage(content=prompt)])
-                raw = extract_text_content(response.content)
-                proposed_code, proposed_config = _parse_code_and_config(raw, baseline_config)
-                rationale = f"Code+config generated by {model_name} for: {latest_hypothesis.title}"
-                logger.info(
-                    "Karpathy code planner raw response "
-                    "run_id=%s iteration=%s model=%s hypothesis=%r\n%s",
-                    state.get("run_id"),
-                    state.get("iteration"),
-                    model_name,
-                    latest_hypothesis.title,
-                    raw,
-                )
-                logger.info(
-                    "Karpathy code planner parsed code "
-                    "run_id=%s iteration=%s\n%s",
-                    state.get("run_id"),
-                    state.get("iteration"),
-                    proposed_code,
-                )
-                logger.info(
-                    "Karpathy code planner parsed config "
-                    "run_id=%s iteration=%s\n%s",
-                    state.get("run_id"),
-                    state.get("iteration"),
-                    proposed_config.model_dump_json(indent=2),
-                )
+        for candidate_idx in range(num_candidates):
+            t = min(temperature + 0.05 * candidate_idx, 0.95)
+            generated = False
+            for model_name in _candidate_models(settings.gemini_model, settings.gemini_fast_model):
+                if not model_name:
+                    continue
+                try:
+                    llm = ChatGoogleGenerativeAI(
+                        model=model_name,
+                        google_api_key=settings.google_api_key,
+                        temperature=t,
+                    )
+                    response = await llm.ainvoke([HumanMessage(content=prompt)])
+                    raw = extract_text_content(response.content)
+                    code, cfg = _parse_code_and_config(raw, baseline_config)
+                    logger.info(
+                        "Karpathy code planner candidate %d/%d "
+                        "run_id=%s iteration=%s model=%s temperature=%.2f hypothesis=%r\n%s",
+                        candidate_idx + 1, num_candidates,
+                        state.get("run_id"),
+                        state.get("iteration"),
+                        model_name,
+                        t,
+                        latest_hypothesis.title,
+                        raw,
+                    )
+                    if code and code.strip() != current_code.strip():
+                        cfg.embedding_model = settings.embedding_model
+                        candidates.append({
+                            "code": code,
+                            "config": cfg,
+                            "rationale": f"Code+config generated by {model_name} (candidate {candidate_idx + 1}, temp={t:.2f}) for: {latest_hypothesis.title}",
+                        })
+                    generated = True
+                    break
+                except Exception as exc:
+                    logger.warning("Code planner LLM call failed (%s): %s", model_name, exc)
+                    continue
+            if not generated:
                 break
-            except Exception as exc:
-                logger.warning("Code planner LLM call failed (%s): %s", model_name, exc)
-                continue
 
-    if not proposed_code:
+    if candidates:
+        best = candidates[0]
+        proposed_code = best["code"]
+        proposed_config = best["config"]
+        rationale = best["rationale"]
+    else:
         proposed_code = _fallback_code(state)
         proposed_config = baseline_config.model_copy(deep=True)
         rationale = f"Fallback code perturbation for: {latest_hypothesis.title}"
@@ -396,20 +507,18 @@ async def code_planner_agent(state: ResearchLabState) -> ResearchLabState:
     if proposed_code.strip() == current_code.strip():
         proposed_code = _fallback_code(state)
         rationale = f"Fallback no-op replacement for: {latest_hypothesis.title}"
-        logger.info(
-            "Karpathy code planner replaced no-op candidate "
-            "run_id=%s iteration=%s hypothesis=%r\n%s",
-            state.get("run_id"),
-            state.get("iteration"),
-            latest_hypothesis.title,
-            proposed_code,
-        )
 
     proposed_config.embedding_model = settings.embedding_model
 
     state["proposed_code"] = proposed_code
     state["proposed_config"] = proposed_config
     state["planner_rationale"] = rationale
+
+    extra_candidates = [
+        {"code": c["code"], "config": c["config"].model_dump(), "rationale": c["rationale"]}
+        for c in candidates[1:]
+    ]
+    state["proposed_candidates"] = extra_candidates
 
     spec = ExperimentSpec(
         id=f"exp_{uuid4().hex[:8]}",

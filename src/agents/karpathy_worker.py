@@ -33,6 +33,8 @@ SANDBOX_QDRANT_PATH = "/app/index/qdrant_data"
 
 ALLOWED_IMPORTS = frozenset({
     "src.retrieval.base",
+    "src.retrieval.embeddings",
+    "src.retrieval.reranker",
     "src.benchmark.loader",
     "re",
     "math",
@@ -72,7 +74,10 @@ def _validate_imports(code: str) -> str | None:
 
 
 def _validate_signature(code: str) -> str | None:
-    """Verify the retrieve() function exists with correct parameters."""
+    """Verify the retrieve() function exists with correct positional parameters.
+
+    Keyword-only args (encoder, reranker) are optional and not checked here.
+    """
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
@@ -365,6 +370,23 @@ def _run_benchmark_for_code(
     return _run_benchmark_isolated_in_process(state, pipeline_code)
 
 
+def _benchmark_state_with_config(
+    state: ResearchLabState,
+    config: RetrievalConfig | None,
+) -> ResearchLabState:
+    """Return a shallow state copy whose benchmark config is explicit.
+
+    Karpathy benchmark payloads prefer `proposed_config` over `best_config`.
+    Incumbent evaluations therefore must clear `proposed_config`, otherwise
+    the old pipeline code is measured with the new candidate config.
+    """
+    benchmark_state = dict(state)
+    benchmark_state["proposed_config"] = None
+    if config is not None:
+        benchmark_state["best_config"] = config
+    return benchmark_state  # type: ignore[return-value]
+
+
 def _failed_result(
     state: ResearchLabState,
     experiment_id: str,
@@ -409,25 +431,55 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
         state["latest_summary"] = f"Code validation failed: {validation_error}"
         return state
 
-    # Step 2: Run benchmark with the proposed session pipeline.
-    try:
-        question_results, metrics = await asyncio.to_thread(
-            _run_benchmark_for_code, state, proposed_code
-        )
-    except Exception as exc:
-        logger.error("Sandbox benchmark run failed: %s", exc)
-        result = _failed_result(state, experiment.id, f"Sandbox benchmark failed: {exc}")
-        state["results"] = state["results"] + [result]
-        state["completed_experiments"] = state["completed_experiments"] + [experiment]
-        state["experiment_queue"] = state["experiment_queue"][1:]
-        state["latest_summary"] = f"Sandbox benchmark failed: {exc}"
-        return state
+    # Step 2: Collect all valid candidates (primary + extras from best-of-N).
+    all_candidates = [{"code": proposed_code, "config": state.get("proposed_config")}]
+    for extra in state.get("proposed_candidates", []):
+        extra_code = extra.get("code", "")
+        if extra_code and _validate_code(extra_code) is None:
+            cfg = extra.get("config")
+            if isinstance(cfg, dict):
+                cfg = RetrievalConfig.model_validate(cfg)
+            all_candidates.append({"code": extra_code, "config": cfg})
 
-    if metrics.total_questions <= 0 or not question_results:
+    # Step 3: Evaluate all candidates and pick the best.
+    from src.benchmark.metrics import composite_score as calc_score
+
+    best_qr: list[QuestionResult] | None = None
+    best_metrics: BenchmarkMetrics | None = None
+    best_score = -1.0
+    best_candidate_code = proposed_code
+    best_candidate_config = state.get("proposed_config")
+
+    for i, cand in enumerate(all_candidates):
+        cand_code = cand["code"]
+        eval_state = _benchmark_state_with_config(state, cand.get("config"))
+        eval_state["proposed_config"] = cand.get("config")
+        try:
+            qr, m = await asyncio.to_thread(
+                _run_benchmark_for_code, eval_state, cand_code
+            )
+        except Exception as exc:
+            logger.warning("Candidate %d/%d benchmark failed: %s", i + 1, len(all_candidates), exc)
+            continue
+        if m.total_questions <= 0 or not qr:
+            continue
+        score = calc_score(m)
+        logger.info(
+            "Candidate %d/%d score=%.4f run_id=%s",
+            i + 1, len(all_candidates), score, state.get("run_id"),
+        )
+        if score > best_score:
+            best_score = score
+            best_qr = qr
+            best_metrics = m
+            best_candidate_code = cand_code
+            best_candidate_config = cand.get("config")
+
+    if best_qr is None or best_metrics is None:
         result = _failed_result(
             state,
             experiment.id,
-            "Benchmark returned zero questions. Check sandbox data and benchmark_root mounts.",
+            "All candidates failed benchmark evaluation.",
         )
         state["results"] = state["results"] + [result]
         state["completed_experiments"] = state["completed_experiments"] + [experiment]
@@ -435,23 +487,32 @@ async def karpathy_worker_agent(state: ResearchLabState) -> ResearchLabState:
         state["latest_summary"] = result.failure_analysis
         return state
 
-    # Step 3: Also run the incumbent session code for first-iteration A/B comparison.
+    state["proposed_code"] = best_candidate_code
+    if best_candidate_config is not None:
+        state["proposed_config"] = best_candidate_config
+
+    question_results = best_qr
+    metrics = best_metrics
+    candidate_score = best_score
+
+    # Step 4: Also run the incumbent session code for first-iteration A/B comparison.
     incumbent_code = state.get("current_pipeline_code", "")
     incumbent_score = state.get("best_score", -1.0)
+    incumbent_config = state.get("best_config")
 
     if incumbent_code and incumbent_score < 0:
         try:
-            _, incumbent_metrics = await asyncio.to_thread(
-                _run_benchmark_for_code, state, incumbent_code
+            incumbent_state = _benchmark_state_with_config(
+                state,
+                incumbent_config if isinstance(incumbent_config, RetrievalConfig) else None,
             )
-            from src.benchmark.metrics import composite_score as calc_score
+            _, incumbent_metrics = await asyncio.to_thread(
+                _run_benchmark_for_code, incumbent_state, incumbent_code
+            )
             incumbent_score = calc_score(incumbent_metrics)
         except Exception as exc:
             logger.warning("Incumbent benchmark failed; using current best score: %s", exc)
             incumbent_score = state.get("best_score", 0.0)
-
-    from src.benchmark.metrics import composite_score as calc_score
-    candidate_score = calc_score(metrics)
 
     result = ExperimentResult(
         experiment_id=experiment.id,

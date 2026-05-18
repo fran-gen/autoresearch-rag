@@ -41,7 +41,12 @@ class ResearchLabState(TypedDict):
     research_mode: str
     proposed_code: str
     proposed_config: RetrievalConfig | None
+    proposed_candidates: list[dict[str, Any]]
     initial_pipeline_code: str
     current_pipeline_code: str
     code_history: list[dict[str, Any]]
     karpathy_branch: str
+    # Enhanced agent feedback fields
+    per_type_deltas: str
+    previous_per_type_recalls: dict[str, float]
+    technique_registry: list[dict[str, Any]]

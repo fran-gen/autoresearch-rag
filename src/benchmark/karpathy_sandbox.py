@@ -102,15 +102,12 @@ def run_karpathy_benchmark(
     for question in questions:
         start = time.perf_counter()
         try:
-            docs = retrieve_fn(question, retriever, top_k)
+            docs = retrieve_fn(
+                question, retriever, top_k,
+                encoder=encoder, reranker=reranker,
+            )
         except Exception:
             docs = []
-
-        if reranker and docs:
-            try:
-                docs = reranker.rerank(question.question, docs, top_k=top_k)
-            except Exception as exc:
-                logger.warning("Reranker failed for question %s: %s", question.question_id, exc)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         question_results.append(
@@ -118,6 +115,7 @@ def run_karpathy_benchmark(
                 question_id=question.question_id,
                 answer="",
                 document_ids=[doc.document_id for doc in docs],
+                document_scores=[doc.score for doc in docs],
                 latency_ms=elapsed_ms,
             )
         )

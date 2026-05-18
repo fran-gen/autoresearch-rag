@@ -67,6 +67,10 @@ class Settings(BaseSettings):
         default="",
         alias="KARPATHY_QDRANT_HOST_PATH",
     )
+    karpathy_num_candidates: int = Field(
+        default=1,
+        alias="KARPATHY_NUM_CANDIDATES",
+    )
 
     @property
     def has_google_key(self) -> bool:

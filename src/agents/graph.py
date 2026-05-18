@@ -149,8 +149,13 @@ def default_state(
         "research_mode": research_mode,
         "proposed_code": "",
         "proposed_config": None,
+        "proposed_candidates": [],
         "initial_pipeline_code": current_pipeline_code,
         "current_pipeline_code": current_pipeline_code,
         "code_history": [],
         "karpathy_branch": karpathy_branch,
+        # Enhanced agent feedback
+        "per_type_deltas": "",
+        "previous_per_type_recalls": {},
+        "technique_registry": [],
     }

@@ -1,3 +1,4 @@
+from src.agents.code_planner import _candidate_models as _karpathy_candidate_models
 from src.agents.planner import _parse_config_from_llm, _random_fallback
 from src.models import RetrievalConfig
 
@@ -47,3 +48,9 @@ def test_random_fallback_respects_bounds():
     assert 0.0 <= config.dense_weight <= 1.0
     assert isinstance(rationale, str)
     assert len(rationale) > 0
+
+
+def test_karpathy_code_planner_prefers_full_model_before_fast_model():
+    models = _karpathy_candidate_models("gemini-pro", "gemini-flash")
+
+    assert models[:2] == ["gemini-pro", "gemini-flash"]

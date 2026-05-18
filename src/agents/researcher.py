@@ -32,6 +32,19 @@ def _candidate_models(preferred: str) -> list[str]:
     return models
 
 
+def _format_technique_registry_for_researcher(registry: list[dict]) -> str:
+    if not registry:
+        return "No techniques tried yet."
+    lines = []
+    for entry in registry:
+        verdict = "ACCEPTED" if entry.get("accepted") else "REJECTED"
+        technique = entry.get("technique", "unknown")
+        impact = entry.get("per_type_impact", {})
+        impact_parts = [f"{t}: {d:+.3f}" for t, d in impact.items()] if impact else ["n/a"]
+        lines.append(f"- [{verdict}] {technique} (impact: {', '.join(impact_parts)})")
+    return "\n".join(lines)
+
+
 def _build_researcher_prompt(state: ResearchLabState) -> str:
     history = state.get("latest_summary") or "No prior summary."
     per_type = state.get("per_type_summary") or "No breakdown available."
@@ -39,8 +52,10 @@ def _build_researcher_prompt(state: ResearchLabState) -> str:
     exp_history = format_experiment_history(state, max_entries=8)
     rejected = format_rejected_experiments_summary(state, max_entries=8)
     recommendation = state.get("recommendation", "")
+    registry = state.get("technique_registry", [])
+    question_focus = state.get("question_focus", "all")
 
-    return (
+    prompt = (
         "You are a RAG research agent optimizing retrieval for enterprise QA.\n\n"
         "## Latest experiment summary\n"
         f"{history}\n\n"
@@ -52,13 +67,28 @@ def _build_researcher_prompt(state: ResearchLabState) -> str:
         f"{exp_history}\n\n"
         "## Rejected experiments (DO NOT repeat these)\n"
         f"{rejected}\n\n"
-        + (f"## System recommendation\n{recommendation}\n\n" if recommendation else "")
-        + "## Task\n"
+    )
+    if registry:
+        prompt += (
+            "## Technique registry (what worked and what didn't)\n"
+            f"{_format_technique_registry_for_researcher(registry)}\n\n"
+        )
+    if question_focus and question_focus != "all":
+        prompt += (
+            f"## CURRENT FOCUS: {question_focus}\n"
+            "The system has auto-focused on this question type because of repeated "
+            "rejections. Prioritize hypotheses that target this type.\n\n"
+        )
+    if recommendation:
+        prompt += f"## System recommendation\n{recommendation}\n\n"
+    prompt += (
+        "## Task\n"
         "Propose ONE concise retrieval hypothesis to test next. "
         "Focus on the weakest question types. "
         "Avoid repeating approaches that were already tried and rejected.\n"
         "Return as: TITLE|||RATIONALE|||EXPECTED_IMPACT\n"
     )
+    return prompt
 
 
 async def researcher_agent(state: ResearchLabState) -> ResearchLabState:
