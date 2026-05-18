@@ -18,6 +18,90 @@
     </div>
   </section>
 
+  <div class="box page-block experiment-search-hero">
+    <div class="experiment-search-hero__copy">
+      <p class="heading">Lookup</p>
+      <h2 class="title is-5 mb-1">Jump to hypothesis detail</h2>
+      <p class="section-hint mb-0">Search by hypothesis ID or by an experiment ID that was created from one or more hypotheses.</p>
+    </div>
+
+    <form class="experiment-search-bar" method="post">
+      <label class="is-sr-only" for="lookup_id">Hypothesis or experiment ID</label>
+      <span class="experiment-search-bar__icon" aria-hidden="true">ID</span>
+      <input class="input experiment-search-bar__input" type="text" id="lookup_id" name="lookup_id" value="{{ lookup_id }}" placeholder="Search by hypothesis or experiment ID..." required autofocus>
+      <span class="help-tooltip experiment-search-bar__help" tabindex="0" aria-label="Use a hypothesis ID or experiment ID." data-tooltip="Paste a hypothesis ID from this page or an experiment ID from the timeline, registry, or leaderboard.">?</span>
+      <button class="button is-link experiment-search-bar__button" type="submit">View hypothesis</button>
+    </form>
+
+    {% if search_error %}
+      <div class="notification is-danger is-light experiment-search-error">{{ search_error }}</div>
+    {% endif %}
+    {% if experiment_error %}
+      <div class="notification is-warning is-light experiment-search-error">Experiment lookup is partially unavailable: {{ experiment_error }}</div>
+    {% endif %}
+  </div>
+
+  {% if selected_hypotheses %}
+    <div class="box page-block hypothesis-detail-card">
+      <div class="level is-mobile mb-4">
+        <div class="level-left">
+          <div>
+            <p class="heading">Detail</p>
+            <h2 class="title is-5">Matched hypotheses</h2>
+            {% if matched_experiment_id %}
+              <p class="section-hint">Resolved from experiment <code>{{ matched_experiment_id }}</code>.</p>
+            {% else %}
+              <p class="section-hint">Resolved from hypothesis ID.</p>
+            {% endif %}
+          </div>
+        </div>
+        <div class="level-right">
+          <span class="tag is-light">{{ selected_hypotheses|length }} hypothesis{% if selected_hypotheses|length != 1 %}es{% endif %}</span>
+        </div>
+      </div>
+
+      {% for hypothesis in selected_hypotheses %}
+        <article class="notification is-light">
+          <p class="heading mb-1"><code>{{ hypothesis.id }}</code></p>
+          <h3 class="title is-6 mb-2">{{ hypothesis.title }}</h3>
+          <p class="mb-2"><strong>Expected impact:</strong> {{ hypothesis.expected_impact }}</p>
+          <p class="mb-2"><strong>Rationale:</strong> {{ hypothesis.rationale }}</p>
+          <p class="is-size-7 has-text-grey mb-0">Created: {{ hypothesis.created_at_display }}</p>
+        </article>
+      {% endfor %}
+
+      <h3 class="title is-6 mt-4">Related experiments</h3>
+      {% if related_experiments %}
+        <div class="table-container">
+          <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Experiment ID</th>
+                <th>Hypothesis ID</th>
+                <th>Created</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for exp in related_experiments %}
+                <tr>
+                  <td>{% if exp.run_position %}#{{ exp.run_position }} · {% endif %}{{ exp.name }}</td>
+                  <td><code>{{ exp.id }}</code></td>
+                  <td><code>{{ exp.hypothesis_id }}</code></td>
+                  <td>{{ exp.created_at_display }}</td>
+                  <td><a class="button is-small is-light" href="{{ url_for('experiment_detail_search', exp_id=exp.id) }}">Open experiment</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="notification is-light">No related experiments recorded yet.</div>
+      {% endif %}
+    </div>
+  {% endif %}
+
   <div class="box hypothesis-log-card">
     <div class="level is-mobile mb-4">
       <div class="level-left">
@@ -53,7 +137,7 @@
           <tbody>
             {% for hypothesis in hypotheses %}
               <tr>
-                <td class="hypothesis-id-col"><code>{{ hypothesis.id }}</code></td>
+                <td class="hypothesis-id-col"><a href="{{ url_for('hypotheses', hypothesis_id=hypothesis.id) }}"><code>{{ hypothesis.id }}</code></a></td>
                 <td>{{ hypothesis.title }}</td>
                 <td>{{ hypothesis.expected_impact }}</td>
                 <td>{{ hypothesis.rationale }}</td>
