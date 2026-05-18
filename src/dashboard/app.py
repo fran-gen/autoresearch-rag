@@ -127,6 +127,7 @@ DEFAULT_REFRESH_SECONDS = 5
 MAX_RESEARCH_ITERATIONS = 10
 PUBLIC_ENDPOINTS = {"up", "index", "login", "logout", "register", "callback", "dashboard_logout", "static", "api_proxy"}
 AUTH_ENDPOINTS = {"login", "register", "callback", "logout"}
+BACKGROUND_ENDPOINTS = {"dashboard_status_snapshot"}
 _kinde_callback_url = (os.getenv("KINDE_CALLBACK_URL") or "").strip()
 _parsed_callback = urlparse(_kinde_callback_url) if _kinde_callback_url else None
 CANONICAL_AUTH_ORIGIN = (
@@ -162,22 +163,8 @@ def is_absolute_url(value: str) -> bool:
     return bool(parsed.scheme and parsed.netloc)
 
 
-def normalize_api_proxy_prefix(value: str) -> str:
-    if not value:
-        return "/api"
-
-    if is_absolute_url(value):
-        path = urlparse(value).path.rstrip("/")
-        return path or "/api"
-
-    normalized = value.strip()
-    if not normalized.startswith("/"):
-        normalized = f"/{normalized}"
-
-    return normalized.rstrip("/") or "/api"
-
-
-API_PROXY_PREFIX = normalize_api_proxy_prefix(API_BASE)
+API_ROUTE_PREFIX = "/api"
+API_PROXY_PREFIX = "/api"
 API_UPSTREAM = (
     os.getenv("API_UPSTREAM")
     or os.getenv("INTERNAL_API_BASE")
@@ -194,6 +181,7 @@ def log_dashboard_startup() -> None:
     logger.info("Dashboard startup project root: %s", BASE_DIR)
     logger.info("Dashboard startup API_BASE: %s", API_BASE)
     logger.info("Dashboard startup API_UPSTREAM: %s", API_UPSTREAM)
+    logger.info("Dashboard startup API_ROUTE_PREFIX: %s", API_ROUTE_PREFIX or "/")
     logger.info("Dashboard startup BENCHMARK_ROOT env: %s", os.environ.get("BENCHMARK_ROOT", "<unset>"))
     logger.info("Dashboard startup benchmark root: %s", settings.benchmark_root.resolve())
     logger.info("Dashboard startup documents dir: %s", loader.documents_dir.resolve())
@@ -204,7 +192,7 @@ def log_dashboard_startup() -> None:
     logger.info("Dashboard startup qdrant url: %s", settings.qdrant_url or "<unset>")
     logger.info("Dashboard startup qdrant path fallback: %s", settings.qdrant_path.resolve())
     logger.info("Dashboard startup host repo is expected to be mounted at /app by docker-compose.yml")
-    logger.info("Dashboard data status page source: API GET /dataset/status")
+    logger.info("Dashboard data status page source: API GET /api/dataset/status")
     logger.info("Dashboard host download command, full dataset: python scripts/download_dataset.py full")
     logger.info("Dashboard host download command, half dataset: python scripts/download_dataset.py half")
     logger.info("Dashboard in-container index command: docker compose exec api python scripts/embed_dataset.py")
@@ -263,7 +251,11 @@ def redirect_to_async_url(coro: Awaitable[str]) -> Response:
 def get_post_login_redirect_url() -> str:
     post_login_redirect = session.pop("post_login_redirect_url", None)
     if post_login_redirect:
-        return post_login_redirect.get("url", "/")
+        target = post_login_redirect.get("url", "/")
+        parsed = urlparse(target)
+        if parsed.path == url_for("dashboard_status_snapshot"):
+            return "/"
+        return target
     return "/"
 
 
@@ -390,6 +382,15 @@ def get_user_initials(user_data: dict[str, str | None]) -> str:
     return initials.upper() or "KU"
 
 
+def get_user_display_name(user_data: dict[str, str | None]) -> str:
+    name_parts = [
+        part.strip()
+        for part in (user_data.get("user_given_name"), user_data.get("user_family_name"))
+        if part and part.strip()
+    ]
+    return " ".join(name_parts) or user_data.get("user_email") or "User"
+
+
 def build_nav_items() -> list[dict[str, str | bool]]:
     current_endpoint = request.endpoint or ""
     return [
@@ -410,6 +411,8 @@ def current_redirect_target() -> str:
 
 
 def remember_post_login_redirect() -> None:
+    if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return
     session["post_login_redirect_url"] = {"url": current_redirect_target()}
 
 
@@ -450,11 +453,13 @@ def normalize_bool(value, default: bool = False) -> bool:
 
 
 def get_dashboard_api_base() -> str:
-    return API_UPSTREAM
+    if API_UPSTREAM.endswith(API_ROUTE_PREFIX):
+        return API_UPSTREAM
+    return f"{API_UPSTREAM}{API_ROUTE_PREFIX}"
 
 
 def build_api_proxy_target(path: str = "") -> str:
-    target = API_UPSTREAM
+    target = get_dashboard_api_base()
     if path:
         target = f"{target}/{path.lstrip('/')}"
 
@@ -482,15 +487,20 @@ def build_api_proxy_headers() -> dict[str, str]:
 
 def rewrite_proxy_response_headers(response_headers: requests.structures.CaseInsensitiveDict) -> list[tuple[str, str]]:
     rewritten_headers = []
-    upstream_origin = urlparse(API_UPSTREAM)
+    upstream_base = get_dashboard_api_base().rstrip("/")
+    upstream_origin = urlparse(upstream_base)
+    upstream_origin_url = f"{upstream_origin.scheme}://{upstream_origin.netloc}"
     public_origin = request.host_url.rstrip("/")
 
     for name, value in response_headers.items():
         if name.lower() in HOP_BY_HOP_HEADERS:
             continue
 
-        if name.lower() == "location" and value.startswith(f"{upstream_origin.scheme}://{upstream_origin.netloc}"):
-            suffix = value[len(f"{upstream_origin.scheme}://{upstream_origin.netloc}"):]
+        if name.lower() == "location" and value.startswith(upstream_origin_url):
+            if value.startswith(upstream_base):
+                suffix = value[len(upstream_base):]
+            else:
+                suffix = value[len(upstream_origin_url):]
             value = f"{public_origin}{API_PROXY_PREFIX}{suffix}"
 
         rewritten_headers.append((name, value))
@@ -1958,6 +1968,7 @@ def inject_template_context():
         "current_endpoint": request.endpoint,
         "nav_items": build_nav_items(),
         "user_initials": get_user_initials(user_data),
+        "user_display_name": get_user_display_name(user_data),
         "dashboard_live_mode": normalize_bool(session.get("live_mode"), default=False),
         "dashboard_refresh_every": normalize_refresh_seconds(session.get("refresh_every")),
         "sidebar_status": get_sidebar_status_snapshot(),
@@ -1974,6 +1985,9 @@ def protect_dashboard_routes():
 
     if kinde_oauth.is_authenticated():
         return None
+
+    if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"detail": "Authentication required."}), 401
 
     remember_post_login_redirect()
     return redirect(url_for("login"))
@@ -2001,6 +2015,20 @@ def dashboard_preferences():
     flash("Dashboard settings updated.", "success")
     next_url = (request.form.get("next") or "").strip() or url_for("index")
     return redirect(next_url)
+
+
+@app.route("/dashboard/status")
+def dashboard_status_snapshot():
+    live_mode, refresh_every = get_dashboard_preferences()
+    sidebar_status = get_sidebar_status_snapshot()
+    return jsonify(
+        {
+            "live_mode": live_mode,
+            "refresh_every": refresh_every,
+            "should_poll": live_mode or sidebar_status.get("state") in {"Running", "Updating"},
+            "sidebar_status": sidebar_status,
+        }
+    )
 
 
 @app.route("/dashboard/api-key", methods=["POST"])

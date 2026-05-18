@@ -1,11 +1,5 @@
 {% extends "logged_in.html" %}
 
-{% block head %}
-  {% if live_mode or show_running_animation %}
-    <meta http-equiv="refresh" content="{{ refresh_every }}">
-  {% endif %}
-{% endblock %}
-
 {% block sidebar %}
   <div class="notification is-light sidebar-panel">
     <p class="has-text-weight-semibold mb-2">How to read this page</p>
@@ -14,6 +8,9 @@
 {% endblock %}
 
 {% block main %}
+  <div id="experiments-live-region" class="experiments-live-region" data-poll-enabled="{{ 1 if live_mode or show_running_animation else 0 }}" data-refresh-every="{{ refresh_every }}" data-live-url="{{ url_for('experiments') }}">
+  <script type="application/json" id="experiment-score-data">{{ {"rows": score_history_rows, "baseline": initial_baseline} | tojson }}</script>
+  <script type="application/json" id="experiment-per-type-data">{{ per_type_rows | tojson }}</script>
   <section class="level page-block">
     <div class="level-left">
       <div>
@@ -235,7 +232,9 @@
       </div>
 
       <div class="score-signal-card score-signal-card--hero {% if best_delta is not none and best_delta >= 0 %}score-signal-card--up{% elif best_delta is not none %}score-signal-card--down{% endif %}">
-        <div class="score-orbit" aria-hidden="true"><span></span></div>
+        <div class="score-orbit{% if status and status.final_report %} score-orbit--complete{% endif %}" aria-hidden="true">
+          {% if status and status.final_report %}✓{% else %}<span></span>{% endif %}
+        </div>
         <div>
           <p class="heading label-with-help">Best score <span class="help-tooltip" tabindex="0" aria-label="Highest composite score found so far." data-tooltip="Highest composite score found so far across completed runs.">?</span></p>
           <p class="score-signal-card__value">{{ "%.4f"|format(best_score) if best_score is not none and best_score >= 0 else "—" }}</p>
@@ -640,6 +639,7 @@
           </div>
         {% endif %}
   </div>
+  </div>
 
 {% endblock %}
 
@@ -715,24 +715,51 @@
     });
   </script>
 
-  {% if score_history_rows %}
-    <script>
-      document.addEventListener('DOMContentLoaded', function () {
-        var canvas = document.getElementById('dashboard-score-chart');
-        if (!canvas || typeof Chart === 'undefined') return;
+  <script>
+    (function () {
+      var scoreChart = null;
+      var perTypeChart = null;
+      var pollTimer = null;
+      var pollInFlight = false;
+
+      function readJson(root, id, fallback) {
+        var node = (root || document).querySelector('#' + id);
+        if (!node) return fallback;
+        try {
+          return JSON.parse(node.textContent || 'null') || fallback;
+        } catch (e) {
+          return fallback;
+        }
+      }
+
+      function destroyChart(chart) {
+        if (chart) {
+          try { chart.destroy(); } catch (e) {}
+        }
+      }
+
+      function initExperimentCharts(root) {
+        root = root || document;
+        if (typeof Chart === 'undefined') return;
+
+        destroyChart(scoreChart);
+        destroyChart(perTypeChart);
+        scoreChart = null;
+        perTypeChart = null;
 
         var annotationPlugin = window['chartjs-plugin-annotation'];
         if (annotationPlugin) {
           try { Chart.register(annotationPlugin); } catch (e) {}
         }
 
-        var rows = {{ score_history_rows | tojson }};
-        var baselineValue = {{ initial_baseline | tojson }};
-        var scores = rows.map(function (r) { return r.has_score ? r.score : r.plot_score; });
-        var barColors = rows.map(function (r) {
+        var scoreData = readJson(root, 'experiment-score-data', { rows: [], baseline: null });
+        var scoreRows = Array.isArray(scoreData.rows) ? scoreData.rows : [];
+        var scoreCanvas = root.querySelector('#dashboard-score-chart');
+        var scores = scoreRows.map(function (r) { return r.has_score ? r.score : r.plot_score; });
+        var barColors = scoreRows.map(function (r) {
           return r.accepted ? 'rgba(34, 197, 94, 0.85)' : 'rgba(239, 68, 68, 0.85)';
         });
-        var borderColors = rows.map(function (r) {
+        var borderColors = scoreRows.map(function (r) {
           return r.accepted ? 'rgba(34, 197, 94, 1)' : 'rgba(239, 68, 68, 1)';
         });
         var formatScore = function (v) { return typeof v === 'number' ? v.toFixed(4) : '—'; };
@@ -740,126 +767,154 @@
           return r && r.has_score && typeof r.score === 'number' ? r.score.toFixed(4) : 'No valid score';
         };
 
-        new Chart(canvas, {
-          type: 'bar',
-          data: {
-            labels: rows.map(function (r) { return r.label; }),
-            datasets: [
-              {
+        if (scoreCanvas && scoreRows.length) {
+          scoreChart = new Chart(scoreCanvas, {
+            type: 'bar',
+            data: {
+              labels: scoreRows.map(function (r) { return r.label; }),
+              datasets: [{
                 label: 'Score',
                 data: scores,
                 backgroundColor: barColors,
                 borderColor: borderColors,
-                borderWidth: 1, borderRadius: 8, maxBarThickness: 48, minBarLength: 8,
-              },
-            ],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-              legend: {
-                display: true,
-                labels: {
-                  generateLabels: function () {
-                    return [
-                      { text: 'Accepted', fillStyle: 'rgba(34, 197, 94, 0.85)', strokeStyle: 'rgba(34, 197, 94, 1)', lineWidth: 1 },
-                      { text: 'Rejected', fillStyle: 'rgba(239, 68, 68, 0.85)', strokeStyle: 'rgba(239, 68, 68, 1)', lineWidth: 1 },
-                    ];
-                  },
-                },
-              },
-              tooltip: {
-                callbacks: {
-                  label: function (ctx) {
-                    return 'Score: ' + formatRowScore(rows[ctx.dataIndex]);
-                  },
-                  afterBody: function (items) {
-                    var r = rows[items[0].dataIndex];
-                    var lines = ['Incumbent: ' + formatScore(r.baseline)];
-                    if (r.validation_delta !== null && r.validation_delta !== undefined) {
-                      var holdout = typeof r.validation_delta === 'number' ? r.validation_delta.toFixed(4) : '—';
-                      lines.push('Holdout Δ: ' + holdout);
-                    }
-                    lines.push('Verdict: ' + r.result_label);
-                    if (r.reason) lines.push(r.reason);
-                    return lines;
-                  },
-                },
-              },
-              annotation: baselineValue !== null && baselineValue >= 0 ? {
-                annotations: {
-                  baseline: {
-                    type: 'line', yMin: baselineValue, yMax: baselineValue,
-                    borderColor: '#dc244c', borderWidth: 2, borderDash: [6, 6],
-                    label: { display: true, content: 'Baseline: ' + formatScore(baselineValue), position: 'end', backgroundColor: 'rgba(28, 31, 39, 0.92)', color: '#fecdd3' },
-                  },
-                },
-              } : undefined,
+                borderWidth: 1,
+                borderRadius: 8,
+                maxBarThickness: 48,
+                minBarLength: 8,
+              }],
             },
-            scales: {
-              x: { title: { display: true, text: 'Iteration' }, grid: { display: false } },
-              y: { beginAtZero: true, title: { display: true, text: 'Composite Score' } },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: { mode: 'index', intersect: false },
+              plugins: {
+                legend: {
+                  display: true,
+                  labels: {
+                    generateLabels: function () {
+                      return [
+                        { text: 'Accepted', fillStyle: 'rgba(34, 197, 94, 0.85)', strokeStyle: 'rgba(34, 197, 94, 1)', lineWidth: 1 },
+                        { text: 'Rejected', fillStyle: 'rgba(239, 68, 68, 0.85)', strokeStyle: 'rgba(239, 68, 68, 1)', lineWidth: 1 },
+                      ];
+                    },
+                  },
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (ctx) { return 'Score: ' + formatRowScore(scoreRows[ctx.dataIndex]); },
+                    afterBody: function (items) {
+                      var r = scoreRows[items[0].dataIndex];
+                      var lines = ['Incumbent: ' + formatScore(r.baseline)];
+                      if (r.validation_delta !== null && r.validation_delta !== undefined) {
+                        lines.push('Holdout Δ: ' + (typeof r.validation_delta === 'number' ? r.validation_delta.toFixed(4) : '—'));
+                      }
+                      lines.push('Verdict: ' + r.result_label);
+                      if (r.reason) lines.push(r.reason);
+                      return lines;
+                    },
+                  },
+                },
+                annotation: scoreData.baseline !== null && scoreData.baseline >= 0 ? {
+                  annotations: {
+                    baseline: {
+                      type: 'line', yMin: scoreData.baseline, yMax: scoreData.baseline,
+                      borderColor: '#dc244c', borderWidth: 2, borderDash: [6, 6],
+                      label: { display: true, content: 'Baseline: ' + formatScore(scoreData.baseline), position: 'end', backgroundColor: 'rgba(28, 31, 39, 0.92)', color: '#fecdd3' },
+                    },
+                  },
+                } : undefined,
+              },
+              scales: {
+                x: { title: { display: true, text: 'Iteration' }, grid: { display: false } },
+                y: { beginAtZero: true, title: { display: true, text: 'Composite Score' } },
+              },
             },
-          },
-        });
-      });
-    </script>
-  {% endif %}
+          });
+        }
 
-  {% if per_type_rows %}
-    <script>
+        var perTypeRows = readJson(root, 'experiment-per-type-data', []);
+        perTypeRows = Array.isArray(perTypeRows) ? perTypeRows : [];
+        var perTypeCanvas = root.querySelector('#per-type-chart');
+        if (perTypeCanvas && perTypeRows.length) {
+          perTypeChart = new Chart(perTypeCanvas, {
+            type: 'bar',
+            data: {
+              labels: perTypeRows.map(function (r) { return r.name; }),
+              datasets: [
+                { label: 'Recall', data: perTypeRows.map(function (r) { return r.recall; }), backgroundColor: 'rgba(56, 189, 248, 0.82)', borderColor: 'rgba(56, 189, 248, 1)', borderWidth: 1, borderRadius: 8 },
+                { label: 'Precision', data: perTypeRows.map(function (r) { return r.precision; }), backgroundColor: 'rgba(245, 158, 11, 0.82)', borderColor: 'rgba(245, 158, 11, 1)', borderWidth: 1, borderRadius: 8 },
+              ],
+            },
+            options: {
+              indexAxis: 'y',
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: { mode: 'index', intersect: false },
+              plugins: {
+                tooltip: {
+                  callbacks: {
+                    label: function (ctx) { return ctx.dataset.label + ': ' + ctx.parsed.x.toFixed(3); },
+                    afterBody: function (items) { return ['Questions: ' + perTypeRows[items[0].dataIndex].questions]; },
+                  },
+                },
+              },
+              scales: {
+                x: { min: 0, max: 1, title: { display: true, text: 'Score' } },
+                y: { grid: { display: false } },
+              },
+            },
+          });
+        }
+      }
+
+      function startExperimentPolling() {
+        if (pollTimer) clearTimeout(pollTimer);
+        var region = document.getElementById('experiments-live-region');
+        if (!region || region.dataset.pollEnabled !== '1') return;
+
+        var refreshEvery = Math.max(3, parseInt(region.dataset.refreshEvery || '5', 10) || 5);
+        pollTimer = setTimeout(function poll() {
+          if (pollInFlight || document.hidden) {
+            startExperimentPolling();
+            return;
+          }
+
+          pollInFlight = true;
+          var url = new URL(region.dataset.liveUrl || window.location.href, window.location.origin);
+          url.searchParams.set('partial', '1');
+          url.searchParams.set('_', String(Date.now()));
+          region.classList.add('is-live-updating');
+
+          fetch(url.toString(), {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            cache: 'no-store',
+            credentials: 'same-origin',
+          })
+            .then(function (response) {
+              if (!response.ok) throw new Error('Status refresh failed');
+              return response.text();
+            })
+            .then(function (html) {
+              var doc = new DOMParser().parseFromString(html, 'text/html');
+              var nextRegion = doc.getElementById('experiments-live-region');
+              var currentRegion = document.getElementById('experiments-live-region');
+              if (!nextRegion || !currentRegion) return;
+              currentRegion.replaceWith(nextRegion);
+              initExperimentCharts(nextRegion);
+              toggleMode(false);
+            })
+            .catch(function () {})
+            .finally(function () {
+              pollInFlight = false;
+              startExperimentPolling();
+            });
+        }, refreshEvery * 1000);
+      }
+
       document.addEventListener('DOMContentLoaded', function () {
-        var canvas = document.getElementById('per-type-chart');
-        if (!canvas || typeof Chart === 'undefined') return;
-
-        var rows = {{ per_type_rows | tojson }};
-
-        new Chart(canvas, {
-          type: 'bar',
-          data: {
-            labels: rows.map(function (r) { return r.name; }),
-            datasets: [
-              {
-                label: 'Recall',
-                data: rows.map(function (r) { return r.recall; }),
-                backgroundColor: 'rgba(56, 189, 248, 0.82)',
-                borderColor: 'rgba(56, 189, 248, 1)',
-                borderWidth: 1, borderRadius: 8,
-              },
-              {
-                label: 'Precision',
-                data: rows.map(function (r) { return r.precision; }),
-                backgroundColor: 'rgba(245, 158, 11, 0.82)',
-                borderColor: 'rgba(245, 158, 11, 1)',
-                borderWidth: 1, borderRadius: 8,
-              },
-            ],
-          },
-          options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-              tooltip: {
-                callbacks: {
-                  label: function (ctx) { return ctx.dataset.label + ': ' + ctx.parsed.x.toFixed(3); },
-                  afterBody: function (items) {
-                    var r = rows[items[0].dataIndex];
-                    return ['Questions: ' + r.questions];
-                  },
-                },
-              },
-            },
-            scales: {
-              x: { min: 0, max: 1, title: { display: true, text: 'Score' } },
-              y: { grid: { display: false } },
-            },
-          },
-        });
+        initExperimentCharts(document);
+        startExperimentPolling();
       });
-    </script>
-  {% endif %}
+    })();
+  </script>
 {% endblock %}

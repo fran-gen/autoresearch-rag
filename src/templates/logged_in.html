@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block body %}
-  <div class="app-shell">
+  <div class="app-shell" data-dashboard-status-url="{{ url_for('dashboard_status_snapshot') }}" data-dashboard-refresh-every="{{ dashboard_refresh_every }}" data-dashboard-live-mode="{{ 1 if dashboard_live_mode else 0 }}">
     <nav class="navbar app-navbar" role="navigation" aria-label="main navigation">
       <div class="app-navbar__inner">
         <div class="navbar-brand">
@@ -33,22 +33,48 @@
               <span>Dataset</span>
             </a>
 
+            <div class="navbar-item has-dropdown api-key-dropdown" data-api-key-dropdown>
+              <button class="navbar-link api-key-trigger" type="button" aria-haspopup="true" aria-expanded="false">
+                API Key
+              </button>
+
+              <div class="navbar-dropdown is-right">
+                <p class="api-key-menu__title">Use your API key</p>
+                <p class="api-key-menu__copy">Paste a Google Gemini API key for this runtime session. It won't be saved.</p>
+                <form class="api-key-form" method="post" action="{{ url_for('dashboard_api_key') }}">
+                  <input type="hidden" name="next" value="{{ request.path }}">
+                  <div class="field">
+                    <label class="label is-small" for="navbar_api_key">API key</label>
+                    <div class="control">
+                      <input class="input is-small" id="navbar_api_key" name="api_key" type="password" autocomplete="off" placeholder="Paste your API key">
+                    </div>
+                  </div>
+                  <div class="field is-grouped">
+                    <div class="control">
+                      <button class="button is-link is-small" type="submit">Apply key</button>
+                    </div>
+                  </div>
+                </form>
+                <p class="api-key-menu__status">Leave the field empty and apply to clear it from runtime memory.</p>
+              </div>
+            </div>
+
             <div class="navbar-item has-dropdown is-hoverable app-navbar-account">
               <a class="navbar-link app-navbar-profile">
                 {% if user_picture %}
                   <figure class="image is-24x24 avatar-image">
-                    <img class="is-rounded" src="{{ user_picture }}" alt="{{ user_given_name }} {{ user_family_name }}">
+                    <img class="is-rounded" src="{{ user_picture }}" alt="{{ user_display_name }}">
                   </figure>
                 {% else %}
                   <span class="tag is-link is-light is-rounded">{{ user_initials }}</span>
                 {% endif %}
-                <span>{{ user_given_name }} {{ user_family_name }}</span>
+                <span>{{ user_display_name }}</span>
               </a>
 
               <div class="navbar-dropdown is-right">
                 <div class="navbar-item">
                   <div>
-                    <p class="has-text-weight-semibold">{{ user_given_name }} {{ user_family_name }}</p>
+                    <p class="has-text-weight-semibold">{{ user_display_name }}</p>
                   </div>
                 </div>
                 <hr class="navbar-divider">
@@ -62,40 +88,60 @@
 
     <section class="section dashboard-shell">
       <div class="container is-fluid">
-        <div class="columns is-variable is-5">
-          <aside class="column is-4-tablet is-3-desktop">
-            <div class="card dashboard-sidebar">
+        <div class="columns is-variable is-5 dashboard-layout{% if current_endpoint != 'index' %} command-center-collapsible is-command-center-closed{% endif %}"{% if current_endpoint != 'index' %} data-command-center-layout{% endif %}>
+          {% if current_endpoint != 'index' %}
+            <button class="command-center-chip" type="button" data-command-center-open aria-controls="command-center-card" aria-expanded="false">
+              <span class="command-center-chip__dot {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% elif sidebar_status and sidebar_status.last_error %}is-danger{% endif %}" data-command-chip-dot aria-hidden="true"></span>
+              <span class="command-center-chip__label">Command</span>
+              {% if sidebar_status and sidebar_status.last_error %}
+                <span class="command-center-chip__badge" data-command-chip-badge>!</span>
+              {% elif sidebar_status and sidebar_status.state == 'Running' %}
+                <span class="command-center-chip__badge" data-command-chip-badge>live</span>
+              {% else %}
+                <span class="command-center-chip__badge" data-command-chip-badge>{{ (sidebar_status.accepted if sidebar_status else 0) + (sidebar_status.rejected if sidebar_status else 0) }}</span>
+              {% endif %}
+            </button>
+          {% endif %}
+          <aside class="column is-4-tablet is-3-desktop command-center-aside">
+            <div class="card dashboard-sidebar" id="command-center-card" aria-hidden="{{ 'true' if current_endpoint != 'index' else 'false' }}">
               <div class="card-content">
                 <div class="sidebar-control-header">
                   <div>
                     <p class="menu-label mb-1">Command center</p>
                     <p class="sidebar-mini-copy">Live controls, run health, and latest lab updates.</p>
                   </div>
-                  <span class="sidebar-pulse {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% endif %}" aria-hidden="true"></span>
+                  <div class="sidebar-header-actions">
+                    <span class="sidebar-pulse {% if sidebar_status and sidebar_status.state == 'Running' %}is-running{% endif %}" data-sidebar-pulse aria-hidden="true"></span>
+                    {% if current_endpoint != 'index' %}
+                      <button class="command-center-close" type="button" data-command-center-close aria-controls="command-center-card" aria-expanded="false" aria-label="Close command center">x</button>
+                    {% endif %}
+                  </div>
                 </div>
 
                 <div class="sidebar-status-card">
                   <div class="sidebar-status-card__top">
-                    <span class="tag is-{{ sidebar_status.state_class if sidebar_status else 'light' }} {% if sidebar_status and sidebar_status.state_class != 'success' %}is-light{% endif %}">{{ sidebar_status.state if sidebar_status else 'Ready' }}</span>
-                    <span class="sidebar-time">{{ sidebar_status.updated_at if sidebar_status and sidebar_status.updated_at else '—' }}</span>
+                    <span class="tag is-{{ sidebar_status.state_class if sidebar_status else 'light' }} {% if sidebar_status and sidebar_status.state_class != 'success' %}is-light{% endif %}" data-sidebar-state>{{ sidebar_status.state if sidebar_status else 'Ready' }}</span>
+                    <span class="sidebar-time" data-sidebar-updated-at>{{ sidebar_status.updated_at if sidebar_status and sidebar_status.updated_at else '—' }}</span>
                   </div>
                   {% if sidebar_status and sidebar_status.state != 'Ready' and sidebar_status.phase %}
-                    <p class="sidebar-status-card__phase">{{ sidebar_status.phase }}</p>
+                    <p class="sidebar-status-card__phase" data-sidebar-phase>{{ sidebar_status.phase }}</p>
+                  {% else %}
+                    <p class="sidebar-status-card__phase" data-sidebar-phase hidden></p>
                   {% endif %}
                   <div class="sidebar-progress-track" aria-label="Research progress">
-                    <span style="width: {{ sidebar_status.progress_pct if sidebar_status else 0 }}%"></span>
+                    <span data-sidebar-progress style="width: {{ sidebar_status.progress_pct if sidebar_status else 0 }}%"></span>
                   </div>
                   <div class="sidebar-stat-grid">
                     <div>
-                      <span>{{ sidebar_status.accepted if sidebar_status else 0 }}</span>
+                      <span data-sidebar-accepted>{{ sidebar_status.accepted if sidebar_status else 0 }}</span>
                       <small>accepted</small>
                     </div>
                     <div>
-                      <span>{{ sidebar_status.rejected if sidebar_status else 0 }}</span>
+                      <span data-sidebar-rejected>{{ sidebar_status.rejected if sidebar_status else 0 }}</span>
                       <small>rejected</small>
                     </div>
                     <div>
-                      <span>{% if sidebar_status and sidebar_status.best_score is not none %}{{ "%.3f"|format(sidebar_status.best_score) }}{% else %}—{% endif %}</span>
+                      <span data-sidebar-best-score>{% if sidebar_status and sidebar_status.best_score is not none %}{{ "%.3f"|format(sidebar_status.best_score) }}{% else %}—{% endif %}</span>
                       <small>best</small>
                     </div>
                   </div>
@@ -131,9 +177,9 @@
 
                 <div class="sidebar-update-feed">
                   <p class="menu-label mb-2">Latest update</p>
-                  <div class="sidebar-update-item {% if sidebar_status and sidebar_status.last_error %}is-danger{% elif sidebar_status and sidebar_status.state == 'Running' %}is-live{% endif %}">
+                  <div class="sidebar-update-item {% if sidebar_status and sidebar_status.last_error %}is-danger{% elif sidebar_status and sidebar_status.state == 'Running' %}is-live{% endif %}" data-sidebar-update-item>
                     <span class="sidebar-update-dot"></span>
-                    <p>{{ sidebar_status.last_error if sidebar_status and sidebar_status.last_error else sidebar_status.message if sidebar_status and sidebar_status.message else 'No dashboard updates yet.' }}</p>
+                    <p data-sidebar-message>{{ sidebar_status.last_error if sidebar_status and sidebar_status.last_error else sidebar_status.message if sidebar_status and sidebar_status.message else 'No dashboard updates yet.' }}</p>
                   </div>
                 </div>
 
