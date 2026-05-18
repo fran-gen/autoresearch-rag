@@ -1819,9 +1819,23 @@ def build_leaderboard_rows(board: list[dict] | None) -> list[dict[str, object]]:
     return rows
 
 
+def has_google_api_key_for_session() -> bool:
+    if bool(session.get("runtime_google_api_key")):
+        return True
+    return bool(get_settings().google_api_key.strip())
+
+
 def api_request(method: str, path: str, **kwargs):
     url = f"{get_dashboard_api_base()}/{path.lstrip('/')}"
     timeout = kwargs.pop("timeout", 10)
+    headers = dict(kwargs.pop("headers", {}) or {})
+    runtime_api_key = ""
+    if has_request_context():
+        runtime_api_key = str(session.get("runtime_google_api_key") or "").strip()
+    if runtime_api_key:
+        headers["X-Google-Api-Key"] = runtime_api_key
+    if headers:
+        kwargs["headers"] = headers
     started_at = time.perf_counter()
 
     try:
@@ -2083,6 +2097,7 @@ def inject_template_context():
         "dashboard_live_mode": normalize_bool(session.get("live_mode"), default=False),
         "dashboard_refresh_every": normalize_refresh_seconds(session.get("refresh_every")),
         "sidebar_status": get_sidebar_status_snapshot(),
+        "has_google_api_key": has_google_api_key_for_session(),
         **user_data,
     }
 
@@ -2147,15 +2162,12 @@ def dashboard_api_key():
     api_key = (request.form.get("api_key") or "").strip()
     next_url = (request.form.get("next") or "").strip() or url_for("index")
     if not api_key:
-        api_request("POST", "/settings/api-key", json={"api_key": ""}, timeout=5)
-        flash("API key cleared from runtime memory. The default server key will be used.", "success")
+        session.pop("runtime_google_api_key", None)
+        flash("API key cleared for this dashboard session. The default server key will be used.", "success")
         return redirect(next_url)
 
-    _, error = api_request("POST", "/settings/api-key", json={"api_key": api_key}, timeout=5)
-    if error:
-        flash(f"The API service could not be updated: {error}", "warning")
-    else:
-        flash("API key applied in runtime memory. It was not saved or stored.", "success")
+    session["runtime_google_api_key"] = api_key
+    flash("API key applied for this dashboard session.", "success")
     return redirect(next_url)
 
 

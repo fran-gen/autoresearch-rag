@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.agents.graph import build_research_graph, default_state
+from src.agents.progress import reset_progress_reporter, set_progress_reporter
 from src.agents.text_utils import extract_text_content
 from src.benchmark.loader import EnterpriseRagBenchLoader
 from src.benchmark.metrics import composite_score
@@ -52,9 +53,7 @@ DATASET_READINESS_STATUS_TTL_SECONDS = 30.0
 async def _apply_runtime_api_key_from_header(
     x_google_api_key: str | None = Header(default=None),
 ) -> None:
-    if x_google_api_key and x_google_api_key.strip():
-        set_runtime_google_api_key(x_google_api_key)
-        _chat_llm.cache_clear()
+    set_runtime_google_api_key((x_google_api_key or "").strip())
 
 
 router = APIRouter(dependencies=[Depends(_apply_runtime_api_key_from_header)])
@@ -208,12 +207,11 @@ async def dataset_status():
     return _dataset_readiness()
 
 
-@lru_cache(maxsize=2)
-def _chat_llm(model_name: str) -> ChatGoogleGenerativeAI:
-    settings = get_settings()
+@lru_cache(maxsize=16)
+def _chat_llm(model_name: str, api_key: str) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         model=model_name,
-        google_api_key=get_google_api_key(),
+        google_api_key=api_key,
         temperature=0.1,
         request_timeout=30,
         retries=2,
@@ -224,8 +222,18 @@ def _chat_llm(model_name: str) -> ChatGoogleGenerativeAI:
 async def set_api_key(payload: dict[str, Any]):
     api_key = str(payload.get("api_key") or "").strip()
     set_runtime_google_api_key(api_key)
-    _chat_llm.cache_clear()
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "message": "Runtime API keys are request-scoped. Send X-Google-Api-Key per request.",
+    }
+
+
+@router.get("/settings/api-key/status")
+async def api_key_status():
+    settings = get_settings()
+    return {
+        "has_google_key": bool(settings.has_google_key),
+    }
 
 
 def _candidate_chat_models() -> list[str]:
@@ -291,6 +299,22 @@ async def _run_research_loop(run_id: str) -> None:
     graph = build_research_graph()
     run_runtime = runtimes[run_id]
 
+    def report_runtime_progress(
+        phase: str,
+        summary: str | None,
+        detail: dict[str, Any] | None,
+    ) -> None:
+        run_runtime.state["current_phase"] = phase
+        if summary is not None:
+            run_runtime.state["latest_summary"] = summary
+        if detail:
+            progress_detail = dict(run_runtime.state.get("progress_detail") or {})
+            progress_detail.update(detail)
+            progress_detail["phase"] = phase
+            progress_detail["updated_at"] = time.time()
+            run_runtime.state["progress_detail"] = progress_detail
+
+    progress_token = set_progress_reporter(report_runtime_progress)
     try:
         async for event in graph.astream(run_runtime.state, stream_mode="values"):
             run_runtime.state = dict(event)
@@ -307,6 +331,7 @@ async def _run_research_loop(run_id: str) -> None:
         run_runtime.state["current_phase"] = "failed"
         run_runtime.state["latest_summary"] = f"Research loop failed: {exc}"
     finally:
+        reset_progress_reporter(progress_token)
         run_runtime.running = False
         run_runtime.task = None
 
@@ -352,6 +377,7 @@ def _empty_status(run_id: str | None = None) -> dict[str, Any]:
         "current_pipeline_code": "",
         "proposed_code": "",
         "code_history": [],
+        "progress_detail": {},
     }
 
 
@@ -371,6 +397,7 @@ def _status_summary_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "final_report": extract_text_content(run_runtime.state.get("final_report")),
         "last_error": run_runtime.last_error,
         "research_mode": run_runtime.state.get("research_mode", "config"),
+        "progress_detail": run_runtime.state.get("progress_detail", {}),
     }
 
 
@@ -447,6 +474,7 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "tried_config_count": len(run_runtime.state.get("tried_config_fingerprints", []) or []),
         "rejected_config_count": len(run_runtime.state.get("rejected_config_fingerprints", []) or []),
         "last_error": run_runtime.last_error,
+        "progress_detail": run_runtime.state.get("progress_detail", {}),
         # Karpathy mode fields
         "research_mode": run_runtime.state.get("research_mode", "config"),
         "karpathy_branch": run_runtime.state.get("karpathy_branch", ""),
@@ -634,10 +662,11 @@ async def rag_chat(payload: dict[str, Any]):
     response = None
     model_name = ""
     errors: list[str] = []
+    api_key = get_google_api_key()
     for candidate_model in _candidate_chat_models():
         model_name = candidate_model
         try:
-            response = _chat_llm(candidate_model).invoke([HumanMessage(content=prompt)])
+            response = _chat_llm(candidate_model, api_key).invoke([HumanMessage(content=prompt)])
             break
         except Exception as exc:
             errors.append(f"{candidate_model}: {str(exc)[:220]}")

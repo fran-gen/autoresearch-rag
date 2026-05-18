@@ -20,14 +20,31 @@ RetrieveFn = Callable[[object, BaseRetriever, int], list[RetrievedDocument]]
 
 
 class _CappedRetriever(BaseRetriever):
-    """Clamp generated retrieval calls to a bounded candidate pool."""
+    """Clamp generated retrieval calls to a bounded candidate pool and count."""
 
-    def __init__(self, retriever: BaseRetriever, top_k_cap: int) -> None:
+    def __init__(
+        self,
+        retriever: BaseRetriever,
+        top_k_cap: int,
+        calls_per_question_cap: int,
+    ) -> None:
         self.retriever = retriever
         self.top_k_cap = max(1, top_k_cap)
+        self.calls_per_question_cap = max(1, calls_per_question_cap)
+        self._calls_this_question = 0
         self._logged_cap = False
 
+    def begin_question(self) -> None:
+        self._calls_this_question = 0
+
     def retrieve(self, query: str, top_k: int = 8) -> list[RetrievedDocument]:
+        self._calls_this_question += 1
+        if self._calls_this_question > self.calls_per_question_cap:
+            raise RuntimeError(
+                "Candidate exceeded Karpathy retrieve call budget "
+                f"({self.calls_per_question_cap} calls per question)."
+            )
+
         requested = max(1, int(top_k))
         effective_top_k = min(requested, self.top_k_cap)
         if requested > effective_top_k and not self._logged_cap:
@@ -110,6 +127,14 @@ def run_karpathy_benchmark(
     if focus and focus != "all":
         filtered = [q for q in questions if (q.question_type or "unknown") == focus]
         questions = filtered or questions
+    max_questions = max(1, int(settings.karpathy_max_questions))
+    if len(questions) > max_questions:
+        logger.info(
+            "Karpathy benchmark: limited questions from %s to %s",
+            len(questions),
+            max_questions,
+        )
+        questions = questions[:max_questions]
 
     active_config = config or RetrievalConfig(
         strategy="dense",
@@ -121,7 +146,11 @@ def run_karpathy_benchmark(
     active_config.embedding_model = settings.embedding_model
 
     encoder = EmbeddingEncoder(active_config.embedding_model)
-    dense = QdrantDenseRetriever(encoder=encoder, qdrant_path=settings.qdrant_path)
+    dense = QdrantDenseRetriever(
+        encoder=encoder,
+        qdrant_path=settings.qdrant_path,
+        qdrant_url=settings.qdrant_url,
+    )
     records = dense_records_from_documents(documents)
     query_dim = len(encoder.encode(["dimension probe"])[0])
     existing_dim = dense.collection_vector_size()
@@ -133,7 +162,11 @@ def run_karpathy_benchmark(
 
     retriever = _build_retriever(documents, active_config, dense)
     retrieve_cap = max(active_config.top_k, settings.retrieve_top_k_cap)
-    retriever = _CappedRetriever(retriever, retrieve_cap)
+    retriever = _CappedRetriever(
+        retriever,
+        retrieve_cap,
+        settings.karpathy_retrieve_calls_per_question,
+    )
     reranker = _build_reranker(active_config)
     rerank_cap = max(active_config.top_k, settings.rerank_candidate_cap)
     if reranker is not None:
@@ -154,9 +187,15 @@ def run_karpathy_benchmark(
 
     for question in questions:
         start = time.perf_counter()
+        retriever.begin_question()
         try:
             docs = retrieve_fn(question, retriever, top_k)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Karpathy candidate retrieve failed for question %s: %s",
+                question.question_id,
+                exc,
+            )
             docs = []
 
         if reranker and docs:

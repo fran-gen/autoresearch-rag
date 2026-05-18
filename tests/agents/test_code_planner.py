@@ -1,4 +1,10 @@
-from src.agents.code_planner import _fallback_code, _format_code_history, _is_semantic_noop
+from src.agents.code_planner import (
+    _fallback_code,
+    _format_code_history,
+    _is_semantic_noop,
+    _parse_code_and_config,
+)
+from src.models import RetrievalConfig
 
 
 def test_semantic_noop_ignores_comments_and_docstrings():
@@ -87,3 +93,72 @@ def test_code_history_includes_rejection_reason():
     })
 
     assert "Rejected: sandbox timed out." in text
+
+
+def test_parse_code_and_config_trims_trailing_json_without_delimiter():
+    base = RetrievalConfig(
+        strategy="dense",
+        embedding_model="test-model",
+        top_k=8,
+        use_reranker=False,
+    )
+    raw = '''\
+from __future__ import annotations
+
+from src.benchmark.loader import BenchmarkQuestion
+from src.retrieval.base import BaseRetriever, RetrievedDocument
+
+
+def retrieve(
+    question: BenchmarkQuestion,
+    retriever: BaseRetriever,
+    top_k: int,
+) -> list[RetrievedDocument]:
+    return retriever.retrieve(question.question, top_k=top_k)
+
+{
+  "strategy": "hybrid",
+  "top_k": 16,
+  "use_reranker": true
+}
+'''
+
+    code, config = _parse_code_and_config(raw, base)
+
+    assert code.endswith("return retriever.retrieve(question.question, top_k=top_k)")
+    assert "{" not in code
+    assert config.strategy == "hybrid"
+    assert config.top_k == 16
+    assert config.use_reranker is True
+
+
+def test_parse_code_and_config_uses_valid_fenced_python_when_response_has_prose():
+    base = RetrievalConfig(
+        strategy="dense",
+        embedding_model="test-model",
+        top_k=8,
+        use_reranker=False,
+    )
+    raw = '''\
+Here is the candidate:
+
+```python
+from src.benchmark.loader import BenchmarkQuestion
+from src.retrieval.base import BaseRetriever, RetrievedDocument
+
+
+def retrieve(
+    question: BenchmarkQuestion,
+    retriever: BaseRetriever,
+    top_k: int,
+) -> list[RetrievedDocument]:
+    docs = retriever.retrieve(question.question, top_k=top_k)
+    return docs[:top_k]
+```
+'''
+
+    code, config = _parse_code_and_config(raw, base)
+
+    assert code.startswith("from src.benchmark.loader")
+    assert "Here is" not in code
+    assert config == base
