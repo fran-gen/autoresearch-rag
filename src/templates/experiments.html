@@ -862,12 +862,14 @@
             headers: { 'X-Requested-With': 'XMLHttpRequest' },
             cache: 'no-store',
             credentials: 'same-origin',
-          })
+            })
             .then(function (response) {
+              if (response.status === 204) return '';
               if (!response.ok) throw new Error('Status refresh failed');
               return response.text();
             })
             .then(function (html) {
+              if (!html) return;
               var doc = new DOMParser().parseFromString(html, 'text/html');
               var nextRegion = doc.getElementById('experiments-live-region');
               var currentRegion = document.getElementById('experiments-live-region');

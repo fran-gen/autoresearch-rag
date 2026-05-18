@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -414,6 +415,33 @@ def remember_post_login_redirect() -> None:
     if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return
     session["post_login_redirect_url"] = {"url": current_redirect_target()}
+
+
+def unauthenticated_background_response():
+    """Keep long-running dashboard polling quiet when auth expires mid-run."""
+    if request.endpoint == "dashboard_status_snapshot":
+        return jsonify(
+            {
+                "should_poll": False,
+                "auth_required": True,
+                "sidebar_status": {
+                    "reachable": False,
+                    "state": "Signed out",
+                    "state_class": "warning",
+                    "phase": "authentication required",
+                    "progress_pct": 0,
+                    "message": "Sign in again to resume live dashboard updates.",
+                    "last_error": None,
+                    "accepted": 0,
+                    "rejected": 0,
+                    "best_score": None,
+                    "updated_at": datetime.now().strftime("%H:%M:%S"),
+                },
+            }
+        )
+    if request.endpoint == "experiments" and request.args.get("partial") == "1":
+        return Response(status=204)
+    return jsonify({"detail": "Authentication required.", "auth_required": True}), 401
 
 
 def ensure_active_event_loop() -> asyncio.AbstractEventLoop:
@@ -1188,11 +1216,22 @@ def build_taxonomy_rows(taxonomy: dict | None) -> list[dict[str, object]]:
     return rows
 
 
-def build_dataset_readiness_rows(readiness: dict | None) -> list[dict[str, object]]:
+def build_dataset_readiness_rows(
+    readiness: dict | None,
+    *,
+    running: bool = False,
+) -> list[dict[str, object]]:
     readiness = readiness or {}
     if "ready" in readiness:
+        cached_running = bool(running and readiness.get("cached"))
         data_loaded = bool(readiness.get("has_documents") and readiness.get("has_questions"))
         index_loaded = bool(readiness.get("qdrant_ready") or readiness.get("qdrant_busy"))
+        if cached_running:
+            return [
+                {"label": "Data status", "value": "In use"},
+                {"label": "Embedding index", "value": "In use" if index_loaded else "Cached"},
+                {"label": "Overall status", "value": "Active run"},
+            ]
         return [
             {"label": "Data loaded", "value": "Yes" if data_loaded else "No"},
             {"label": "Embedding index", "value": "Loaded" if index_loaded else "Not ready"},
@@ -1710,12 +1749,23 @@ def build_leaderboard_rows(board: list[dict] | None) -> list[dict[str, object]]:
 def api_request(method: str, path: str, **kwargs):
     url = f"{get_dashboard_api_base()}/{path.lstrip('/')}"
     timeout = kwargs.pop("timeout", 10)
+    started_at = time.perf_counter()
 
     try:
         response = requests.request(method, url, timeout=timeout, **kwargs)
     except requests.RequestException as exc:
-        logger.warning("Dashboard API request failed for %s: %s", url, exc)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.warning("Dashboard API request failed for %s after %.1fms: %s", url, elapsed_ms, exc)
         return None, f"Could not reach API at {url}."
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    if elapsed_ms > 500:
+        logger.warning(
+            "Dashboard API request slow method=%s path=%s status=%s elapsed_ms=%.1f",
+            method,
+            path,
+            response.status_code,
+            elapsed_ms,
+        )
 
     if not response.ok:
         detail = None
@@ -1835,7 +1885,10 @@ def get_dashboard_status():
         "journey_entries": build_journey_entries(score_history, baseline_config),
         "per_type_rows": parse_per_type_summary(status.get("per_type_summary") if status else None),
         "taxonomy_rows": build_taxonomy_rows(status.get("failure_taxonomy") if status else None),
-        "dataset_readiness_rows": build_dataset_readiness_rows(status.get("dataset_readiness") if status else None),
+        "dataset_readiness_rows": build_dataset_readiness_rows(
+            status.get("dataset_readiness") if status else None,
+            running=is_running,
+        ),
         "recommendation": status.get("recommendation") if status else None,
         "validation_summary": status.get("validation_summary") if status else None,
         "final_report_html": render_markdown(status.get("final_report") if status else None),
@@ -1886,7 +1939,7 @@ def get_sidebar_status_snapshot() -> dict[str, object]:
         "GET",
         "/research/status",
         timeout=2,
-        params=status_params,
+        params={**status_params, "detail": "summary"},
     )
     if error or not isinstance(status, dict):
         if session.get("research_pending"):
@@ -1972,7 +2025,7 @@ def protect_dashboard_routes():
         return None
 
     if request.endpoint in BACKGROUND_ENDPOINTS or request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return jsonify({"detail": "Authentication required."}), 401
+        return unauthenticated_background_response()
 
     remember_post_login_redirect()
     return redirect(url_for("login"))

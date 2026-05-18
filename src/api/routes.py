@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -22,6 +23,8 @@ from src.models import ExperimentResult, ExperimentSpec, Hypothesis
 from src.retrieval.embeddings import EmbeddingEncoder
 from src.retrieval.qdrant_dense import QdrantDenseRetriever
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class LabRuntime:
@@ -39,8 +42,11 @@ runtimes_lock = asyncio.Lock()
 _dataset_readiness_cache: dict[str, Any] = {
     "indexed_count": 0,
     "qdrant_ready": False,
+    "payload": None,
+    "checked_at": 0.0,
 }
 MAX_RESEARCH_ITERATIONS = 10
+DATASET_READINESS_STATUS_TTL_SECONDS = 30.0
 
 
 async def _apply_runtime_api_key_from_header(
@@ -117,7 +123,7 @@ def _dataset_readiness() -> dict[str, Any]:
     else:
         message = "Documents exist, but the embedding index is not ready. Run `docker compose exec api python scripts/embed_dataset.py`."
 
-    return {
+    payload = {
         "ready": ready,
         "has_documents": has_documents,
         "has_questions": has_questions,
@@ -139,6 +145,62 @@ def _dataset_readiness() -> dict[str, Any]:
         "download_half_command": "python scripts/download_dataset.py half",
         "embed_command": "docker compose exec api python scripts/embed_dataset.py",
     }
+    _dataset_readiness_cache["payload"] = payload
+    _dataset_readiness_cache["checked_at"] = time.time()
+    return payload
+
+
+def _cached_dataset_readiness() -> dict[str, Any]:
+    payload = _dataset_readiness_cache.get("payload")
+    if isinstance(payload, dict):
+        cached = dict(payload)
+        cached["cached"] = True
+        cached["qdrant_busy"] = bool(cached.get("qdrant_busy")) or bool(cached.get("qdrant_ready"))
+        if cached.get("ready"):
+            cached["message"] = "Data and embedding index are available. Status is cached while research is running."
+        return cached
+
+    settings = get_settings()
+    qdrant_ready = bool(_dataset_readiness_cache.get("qdrant_ready"))
+    indexed_count = int(_dataset_readiness_cache.get("indexed_count") or 0)
+    ready = qdrant_ready or indexed_count > 0
+    message = (
+        "Research is running. Dataset readiness has not been refreshed yet, but the active run is using the configured benchmark data."
+        if ready
+        else "Research is running. Live dataset readiness probe is skipped to keep status responsive."
+    )
+    return {
+        "ready": ready,
+        "has_documents": ready,
+        "has_questions": ready,
+        "documents": indexed_count if indexed_count > 0 else None,
+        "questions": "unknown",
+        "sampled_questions": "—",
+        "holdout_questions": "—",
+        "document_count": indexed_count if indexed_count > 0 else None,
+        "indexed_count": indexed_count,
+        "qdrant_ready": qdrant_ready,
+        "qdrant_busy": True,
+        "benchmark_root": str(settings.benchmark_root.resolve()),
+        "documents_dir": "",
+        "bench_dir": "",
+        "qdrant_location": settings.qdrant_url or str(settings.qdrant_path.resolve()),
+        "qdrant_error": "Skipped live readiness probe while research is running.",
+        "message": message,
+        "download_full_command": "python scripts/download_dataset.py full",
+        "download_half_command": "python scripts/download_dataset.py half",
+        "embed_command": "docker compose exec api python scripts/embed_dataset.py",
+        "cached": True,
+    }
+
+
+def _status_dataset_readiness(run_runtime: LabRuntime) -> dict[str, Any]:
+    if run_runtime.running:
+        return _cached_dataset_readiness()
+    cached_at = float(_dataset_readiness_cache.get("checked_at") or 0.0)
+    if _dataset_readiness_cache.get("payload") and time.time() - cached_at < DATASET_READINESS_STATUS_TTL_SECONDS:
+        return _cached_dataset_readiness()
+    return _dataset_readiness()
 
 
 @router.get("/dataset/status")
@@ -293,7 +355,35 @@ def _empty_status(run_id: str | None = None) -> dict[str, Any]:
     }
 
 
+def _status_summary_payload(run_runtime: LabRuntime) -> dict[str, Any]:
+    best_score = run_runtime.state.get("best_score")
+    best_score = best_score if isinstance(best_score, (int, float)) and best_score >= 0 else None
+    return {
+        "run_id": run_runtime.state.get("run_id"),
+        "running": run_runtime.running,
+        "phase": run_runtime.state.get("current_phase"),
+        "iteration": run_runtime.state.get("iteration"),
+        "max_iterations": run_runtime.state.get("max_iterations"),
+        "latest_summary": extract_text_content(run_runtime.state.get("latest_summary")),
+        "best_score": best_score,
+        "accepted_experiments": run_runtime.state.get("accepted_experiments"),
+        "rejected_experiments": run_runtime.state.get("rejected_experiments"),
+        "final_report": extract_text_content(run_runtime.state.get("final_report")),
+        "last_error": run_runtime.last_error,
+        "research_mode": run_runtime.state.get("research_mode", "config"),
+    }
+
+
 def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    timings: list[tuple[str, float]] = []
+
+    def mark(label: str, step_started_at: float) -> float:
+        now = time.perf_counter()
+        timings.append((label, (now - step_started_at) * 1000))
+        return now
+
+    step_started_at = started_at
     candidate = run_runtime.state.get("candidate_config")
     baseline_cfg = run_runtime.state.get("best_config")
     best_score = run_runtime.state.get("best_score")
@@ -313,9 +403,13 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
             initial_cfg = first_exp.get("retrieval_config")
     if initial_cfg is None and baseline_cfg:
         initial_cfg = baseline_cfg.model_dump() if hasattr(baseline_cfg, "model_dump") else baseline_cfg
+    step_started_at = mark("configs", step_started_at)
     score_history = _normalize_history_text(run_runtime.state.get("score_history"))
     code_history = _normalize_history_text(run_runtime.state.get("code_history"))
-    return {
+    step_started_at = mark("history", step_started_at)
+    dataset_readiness = _status_dataset_readiness(run_runtime)
+    step_started_at = mark("dataset_readiness", step_started_at)
+    payload = {
         "run_id": run_runtime.state.get("run_id"),
         "running": run_runtime.running,
         "phase": run_runtime.state.get("current_phase"),
@@ -338,7 +432,7 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "failure_taxonomy": run_runtime.state.get("failure_taxonomy"),
         "recommendation": extract_text_content(run_runtime.state.get("recommendation")),
         "validation_summary": extract_text_content(run_runtime.state.get("validation_summary")),
-        "dataset_readiness": _dataset_readiness(),
+        "dataset_readiness": dataset_readiness,
         "tried_config_count": len(run_runtime.state.get("tried_config_fingerprints", []) or []),
         "rejected_config_count": len(run_runtime.state.get("rejected_config_fingerprints", []) or []),
         "last_error": run_runtime.last_error,
@@ -350,6 +444,22 @@ def _status_payload(run_runtime: LabRuntime) -> dict[str, Any]:
         "proposed_code": run_runtime.state.get("proposed_code", ""),
         "code_history": code_history,
     }
+    mark("payload", step_started_at)
+    total_ms = (time.perf_counter() - started_at) * 1000
+    if total_ms > 500:
+        logger.warning(
+            "research/status full payload slow run_id=%s total_ms=%.1f timings=%s",
+            run_runtime.state.get("run_id"),
+            total_ms,
+            ", ".join(f"{label}={ms:.1f}ms" for label, ms in timings),
+        )
+    else:
+        logger.debug(
+            "research/status full payload run_id=%s total_ms=%.1f",
+            run_runtime.state.get("run_id"),
+            total_ms,
+        )
+    return payload
 
 
 def _normalize_history_text(history: Any) -> list[dict[str, Any]]:
@@ -389,6 +499,11 @@ async def start_research(
             starting_config = json.loads(starting_config_json)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="Invalid starting_config_json.") from exc
+
+    try:
+        _dataset_readiness()
+    except Exception as exc:
+        logger.warning("Dataset readiness preflight failed before run start: %s", exc)
 
     state = default_state(
         max_iterations=max_iterations,
@@ -433,10 +548,21 @@ async def stop_research(run_id: str | None = None):
 
 
 @router.get("/research/status")
-async def research_status(run_id: str | None = None):
+async def research_status(run_id: str | None = None, detail: str = "full"):
+    started_at = time.perf_counter()
     run_runtime = _select_runtime(run_id)
     if not run_runtime.state:
         return _empty_status(run_id)
+    if detail == "summary":
+        payload = _status_summary_payload(run_runtime)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        if elapsed_ms > 250:
+            logger.warning(
+                "research/status summary slow run_id=%s total_ms=%.1f",
+                run_runtime.state.get("run_id"),
+                elapsed_ms,
+            )
+        return payload
     return _status_payload(run_runtime)
 
 

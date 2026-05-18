@@ -212,7 +212,12 @@
               }
               return response.json();
             })
-            .then(updateCommandCenter)
+            .then(function (payload) {
+              if (payload && payload.auth_required) {
+                return;
+              }
+              updateCommandCenter(payload);
+            })
             .catch(function () {})
             .finally(function () {
               dashboardStatusInFlight = false;
