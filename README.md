@@ -20,6 +20,28 @@ The core loop is:
 
 You let the system run overnight and inspect a ranked log of experiments in the morning.
 
+## Models Used in This Project
+
+### Google Frontier Models by Agent
+
+The autonomous agents in this project use Google Gemini frontier models, with environment-configurable defaults:
+
+- `GEMINI_MODEL` (default: `gemini-3.1-pro`)
+- `GEMINI_FAST_MODEL` (default: `gemini-2.5-flash`)
+
+Agent-level usage:
+
+- **Researcher agent** (`src/agents/researcher.py`): uses `GEMINI_MODEL` first, then falls back across `gemini-3.1-pro` and `gemini-2.5-flash`.
+- **Planner agent** (`src/agents/planner.py`): prioritizes `GEMINI_FAST_MODEL`, then `GEMINI_MODEL`, then `gemini-2.5-flash`.
+- **Code Planner agent** (`src/agents/code_planner.py`): prioritizes `GEMINI_FAST_MODEL`, then `GEMINI_MODEL`, with fallbacks `gemini-2.5-flash` and `gemini-3.1-pro`.
+- **Evaluator agent** (`src/agents/evaluator.py`): uses `GEMINI_FAST_MODEL` for final research-session synthesis/reporting.
+- **Benchmark answer generation path** (`src/benchmark/runner.py`): tries `GEMINI_FAST_MODEL`, `GEMINI_MODEL`, then `gemini-2.5-flash` and `gemini-3.1-pro`.
+
+### Transformer Embedding Models Used
+
+- **Primary embedding model**: `BAAI/bge-base-en-v1.5` (configured via `EMBEDDING_MODEL`).
+- **Embedding framework**: `sentence-transformers` (`SentenceTransformer`) for dense vector encoding used by Qdrant retrieval.
+
 ## Dataset
 
 Benchmarking is performed against the [EnterpriseRAG-Bench](https://github.com/onyx-dot-app/EnterpriseRAG-Bench) dataset, a publicly available corpus of over 500,000 synthetic company-internal documents (Slack, Gmail, Linear, Confluence, GitHub PRs, and more) paired with 500 questions across ten difficulty categories ranging from simple factual lookup to multi-document reasoning and conflicting-information resolution.
@@ -37,6 +59,30 @@ For reproducibility, several slices of the dataset have been uploaded to [Huggin
 - **Static code validation**: Candidate pipelines are validated for syntax, forbidden module imports (`os`, `subprocess`, `socket`, etc.), and correct `retrieve(question, retriever, top_k)` signature before execution.
 
 ## Architecture
+
+### Agent Flow Diagram
+
+```mermaid
+flowchart TD
+  start["Start"] --> researcher["Researcher"]
+  researcher --> mode{"research_mode"}
+
+  mode -->|config| planner["Planner"]
+  planner --> worker["Worker"]
+  worker --> evaluator["Evaluator"]
+
+  mode -->|karpathy| code_planner["Code Planner"]
+  code_planner --> karpathy_worker["Karpathy Worker"]
+  karpathy_worker --> evaluator
+
+  evaluator --> stop{"Stop?"}
+  stop -->|No| researcher
+  stop -->|Yes| end["Final Report"]
+
+  note["Karpathy path includes pipeline validation before scoring"]
+  note -.-> code_planner
+  note -.-> karpathy_worker
+```
 
 ```
 src/
