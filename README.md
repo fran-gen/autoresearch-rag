@@ -84,6 +84,8 @@ flowchart TD
   note -.-> karpathy_worker
 ```
 
+### Repo Structure
+
 ```
 src/
   agents/
