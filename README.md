@@ -77,12 +77,14 @@ flowchart TD
 
   evaluator --> stop{"Stop?"}
   stop -->|No| researcher
-  stop -->|Yes| end["Final Report"]
+  stop -->|Yes| final_report["Final Report"]
 
   note["Karpathy path includes pipeline validation before scoring"]
   note -.-> code_planner
   note -.-> karpathy_worker
 ```
+
+### Repo Structure
 
 ```
 src/
