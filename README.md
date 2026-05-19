@@ -177,3 +177,14 @@ This ensures that experiments are isolated, reproducible, and cannot interfere w
 
 ## Contributors
 
+<div align="center">
+  <a href="https://github.com/fran-gen">
+    <img src="https://github.com/fran-gen.png?size=80" width="80" alt="fran-gen" />
+  </a>
+  <a href="https://github.com/Bonhollow">
+    <img src="https://github.com/Bonhollow.png?size=80" width="80" alt="Bonhollow" />
+  </a>
+  <a href="https://github.com/DeanHnter">
+    <img src="https://github.com/DeanHnter.png?size=80" width="80" alt="DeanHnter" />
+  </a>
+</div>
