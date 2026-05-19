@@ -1,15 +1,16 @@
 
-<div align="center">
-  <img src="./static/logo.png" alt="Monotonic Labs Logo" width="100%">
-</div>
 
 # AutoRAG Research Lab
 
 An automated research and experimentation platform for enterprise Retrieval-Augmented Generation (RAG) systems. Built as a hackathon showcase project, this platform enables developers and researchers to systematically benchmark, evaluate, and optimize RAG pipelines through autonomous agent-driven experimentation.
 
+The repository also includes a local web app for experimenting with configuration optimization and Karpathy mode, storing experiment runs, comparing hypotheses, and inspecting how different retrieval strategies perform over time.
+
 ## Motivation
 
 Modern RAG systems have many interacting degrees of freedom: retrieval strategy, embedding model, chunk size, reranking, query rewriting, source diversity, and more. Tuning these by hand is slow and rarely exhaustive. This project applies the same idea behind [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — autonomous agents that iteratively modify and evaluate a system overnight — but targets enterprise RAG rather than LLM training. Instead of editing `train.py` and measuring validation bits-per-byte, agents here edit the retrieval pipeline and measure retrieval accuracy against a fixed benchmark corpus.
+
+The goal is to let agents run retrieval experiments end-to-end, track every hypothesis and configuration they try, and analyze the resulting performance in an analytical, comparable way rather than relying on ad hoc notes or one-off benchmark runs.
 
 The core loop is:
 
@@ -18,7 +19,7 @@ The core loop is:
 3. A **Worker** agent executes the benchmark, either in-process or inside a Docker sandbox.
 4. An **Evaluator** agent scores the result, decides whether to accept or reject the change, and feeds the outcome back into the next iteration.
 
-You let the system run overnight and inspect a ranked log of experiments in the morning.
+You let the system run and inspect a ranked log of experiments.
 
 ## Models Used in This Project
 
@@ -55,7 +56,7 @@ For reproducibility, several slices of the dataset have been uploaded to [Huggin
 - **Pluggable retrieval strategies**: Dense (vector), sparse (BM25), and hybrid retrieval are all first-class strategies. The agent can tune BM25/dense fusion weights, enable cross-encoder reranking, and apply query rewriting per iteration.
 - **Semantic no-op detection**: Before submitting a candidate, the system checks via AST comparison whether the proposed code is semantically equivalent to the current pipeline. Comment-only or docstring-only edits are rejected and replaced with a meaningful fallback.
 - **Config exploration enforcement**: Each iteration must produce both a code change and a distinct configuration. Fingerprint-based deduplication prevents the agent from revisiting configurations that have already been tried.
-- **Interactive dashboard**: Real-time web interface to monitor ongoing experiments, compare results on a leaderboard, and inspect the history of accepted and rejected iterations with per-type performance breakdowns.
+- **Interactive experimentation app**: Local web interface to launch configuration optimization and Karpathy-mode runs, store experiment history, compare hypotheses on a leaderboard, and inspect accepted or rejected iterations with per-type performance breakdowns.
 - **Static code validation**: Candidate pipelines are validated for syntax, forbidden module imports (`os`, `subprocess`, `socket`, etc.), and correct `retrieve(question, retriever, top_k)` signature before execution.
 
 ## Architecture
@@ -153,10 +154,10 @@ cp .env.example .env
 docker compose up --build
 
 # 3. Open the dashboard
-open http://localhost:5001
+open http://localhost:8501/
 ```
 
-The API is available at `http://localhost:8001`. Start a research run by posting a hypothesis to `/api/v1/run/karpathy` and monitor progress through the dashboard.
+The dashboard is available at `http://localhost:8501/`. The API is available at `http://localhost:8001`. Start a research run by posting a hypothesis to `/api/v1/run/karpathy` and monitor progress through the dashboard.
 
 ## Sandboxed Execution
 
@@ -176,14 +177,3 @@ This ensures that experiments are isolated, reproducible, and cannot interfere w
 
 ## Contributors
 
-<div align="center">
-  <a href="https://github.com/fran-gen">
-    <img src="https://github.com/fran-gen.png?size=80" width="80" alt="fran-gen" />
-  </a>
-  <a href="https://github.com/Bonhollow">
-    <img src="https://github.com/Bonhollow.png?size=80" width="80" alt="Bonhollow" />
-  </a>
-  <a href="https://github.com/DeanHnter">
-    <img src="https://github.com/DeanHnter.png?size=80" width="80" alt="DeanHnter" />
-  </a>
-</div>
